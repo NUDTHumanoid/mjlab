@@ -63,12 +63,20 @@ uv run play Mjlab-Velocity-Flat-Unitree-G1 --wandb-run-path your-org/mjlab/run-i
 
 ### 2. Motion Imitation
 
-Train a humanoid to mimic reference motions. mjlab uses WandB to manage motion datasets.
-See the [motion preprocessing documentation](https://github.com/HybridRobotics/whole_body_tracking/blob/main/README.md#motion-preprocessing--registry-setup) for setup instructions.
+Train a humanoid to mimic reference motions from a local `.npz` motion file:
 
 ```bash
-uv run train Mjlab-Tracking-Flat-Unitree-G1 --registry-name your-org/motions/motion-name --env.scene.num-envs 4096
-uv run play Mjlab-Tracking-Flat-Unitree-G1 --wandb-run-path your-org/mjlab/run-id
+uv run train Mjlab-Tracking-Flat-Unitree-G1 \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --env.scene.num-envs 4096
+```
+
+Play a trained policy from a local checkpoint with a local motion file:
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1 \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz
 ```
 
 ### 3. Sanity-check with Dummy Agents
@@ -80,7 +88,7 @@ uv run play Mjlab-Your-Task-Id --agent zero  # Sends zero actions
 uv run play Mjlab-Your-Task-Id --agent random  # Sends uniform random actions
 ```
 
-When running motion-tracking tasks, add `--registry-name your-org/motions/motion-name` to the command.
+When running motion-tracking tasks, add `--motion-file /path/to/motion.npz` to the command.
 
 
 ## Documentation

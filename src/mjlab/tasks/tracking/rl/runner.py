@@ -2,7 +2,6 @@ import os
 from typing import cast
 
 import torch
-import wandb
 from rsl_rl.env.vec_env import VecEnv
 from torch import nn
 
@@ -95,9 +94,12 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     filename = policy_path.split("/")[-2] + ".onnx"
     try:
       self.export_policy_to_onnx(policy_path, filename)
-      run_name: str = (
-        wandb.run.name if self.logger.logger_type == "wandb" and wandb.run else "local"
-      )  # type: ignore[assignment]
+      run_name = "local"
+      if self.logger.logger_type == "wandb":
+        import wandb
+
+        if wandb.run:
+          run_name = wandb.run.name
       metadata = get_base_metadata(self.env.unwrapped, run_name)
       motion_term = cast(
         MotionCommand, self.env.unwrapped.command_manager.get_term("motion")
@@ -110,6 +112,8 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
       )
       attach_metadata_to_onnx(os.path.join(policy_path, filename), metadata)
       if self.logger.logger_type in ["wandb"] and self.cfg["upload_model"]:
+        import wandb
+
         wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
         if self.registry_name is not None:
           wandb.run.use_artifact(self.registry_name)  # type: ignore

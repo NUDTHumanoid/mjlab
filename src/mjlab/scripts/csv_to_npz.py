@@ -1,5 +1,8 @@
-from typing import Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
 
+import mujoco
 import numpy as np
 import torch
 import tyro
@@ -12,12 +15,54 @@ from mjlab.sim.sim import Simulation, SimulationCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
+  quat_apply,
   quat_conjugate,
   quat_mul,
   quat_slerp,
 )
 from mjlab.viewer.offscreen_renderer import OffscreenRenderer
 from mjlab.viewer.viewer_config import ViewerConfig
+
+G1_TRACKING_JOINT_NAMES = [
+  "left_hip_pitch_joint",
+  "left_hip_roll_joint",
+  "left_hip_yaw_joint",
+  "left_knee_joint",
+  "left_ankle_pitch_joint",
+  "left_ankle_roll_joint",
+  "right_hip_pitch_joint",
+  "right_hip_roll_joint",
+  "right_hip_yaw_joint",
+  "right_knee_joint",
+  "right_ankle_pitch_joint",
+  "right_ankle_roll_joint",
+  "waist_yaw_joint",
+  "waist_roll_joint",
+  "waist_pitch_joint",
+  "left_shoulder_pitch_joint",
+  "left_shoulder_roll_joint",
+  "left_shoulder_yaw_joint",
+  "left_elbow_joint",
+  "left_wrist_roll_joint",
+  "left_wrist_pitch_joint",
+  "left_wrist_yaw_joint",
+  "right_shoulder_pitch_joint",
+  "right_shoulder_roll_joint",
+  "right_shoulder_yaw_joint",
+  "right_elbow_joint",
+  "right_wrist_roll_joint",
+  "right_wrist_pitch_joint",
+  "right_wrist_yaw_joint",
+]
+G1_FOOT_GEOM_PATTERN = r"^(left|right)_foot[1-7]_collision$"
+
+
+@dataclass(frozen=True)
+class GroundingStats:
+  foot_geom_names: tuple[str, ...]
+  frame_min_foot_z: np.ndarray
+  global_min_foot_z: float
+  recommended_delta_z: float
 
 
 class MotionLoader:
@@ -180,18 +225,218 @@ class MotionLoader:
     return state, reset_flag
 
 
+def resolve_device(device: str) -> str:
+  if device.startswith("cuda") and not torch.cuda.is_available():
+    print("[WARNING]: CUDA is not available. Falling back to CPU. This may be slow.")
+    return "cpu"
+  return device
+
+
+def build_tracking_sim(
+  output_fps: float,
+  device: str,
+  render: bool = False,
+) -> tuple[Simulation, Scene, OffscreenRenderer | None]:
+  sim_cfg = SimulationCfg()
+  sim_cfg.mujoco.timestep = 1.0 / output_fps
+
+  scene = Scene(unitree_g1_flat_tracking_env_cfg().scene, device=device)
+  model = scene.compile()
+
+  sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)
+  scene.initialize(sim.mj_model, sim.model, sim.data)
+
+  renderer = None
+  if render:
+    viewer_cfg = ViewerConfig(
+      height=480,
+      width=640,
+      origin_type=ViewerConfig.OriginType.ASSET_ROOT,
+      entity_name="robot",
+      distance=2.0,
+      elevation=-5.0,
+      azimuth=20,
+    )
+    renderer = OffscreenRenderer(
+      model=sim.mj_model,
+      cfg=viewer_cfg,
+      scene=scene,
+    )
+    renderer.initialize()
+
+  return sim, scene, renderer
+
+
+def get_tracking_robot(scene: Scene) -> tuple[Entity, list[int]]:
+  robot: Entity = scene["robot"]
+  robot_joint_indexes = robot.find_joints(
+    G1_TRACKING_JOINT_NAMES, preserve_order=True
+  )[0]
+  return robot, robot_joint_indexes
+
+
+def _write_motion_frame_to_sim(
+  sim: Simulation,
+  scene: Scene,
+  robot: Entity,
+  robot_joint_indexes: list[int],
+  motion: MotionLoader,
+  frame_idx: int,
+) -> None:
+  root_states = robot.data.default_root_state.clone()
+  root_states[:, 0:3] = motion.motion_base_poss[frame_idx : frame_idx + 1]
+  root_states[:, :2] += scene.env_origins[:, :2]
+  root_states[:, 3:7] = motion.motion_base_rots[frame_idx : frame_idx + 1]
+  root_states[:, 7:10] = motion.motion_base_lin_vels[frame_idx : frame_idx + 1]
+  root_states[:, 10:] = motion.motion_base_ang_vels[frame_idx : frame_idx + 1]
+  robot.write_root_state_to_sim(root_states)
+
+  joint_pos = robot.data.default_joint_pos.clone()
+  joint_vel = robot.data.default_joint_vel.clone()
+  joint_pos[:, robot_joint_indexes] = motion.motion_dof_poss[frame_idx : frame_idx + 1]
+  joint_vel[:, robot_joint_indexes] = motion.motion_dof_vels[frame_idx : frame_idx + 1]
+  robot.write_joint_state_to_sim(joint_pos, joint_vel)
+
+  sim.forward()
+  scene.update(sim.mj_model.opt.timestep)
+
+
+def _compute_geom_bottom_heights(
+  geom_pos_w: torch.Tensor,
+  geom_quat_w: torch.Tensor,
+  geom_sizes: torch.Tensor,
+  geom_types: np.ndarray,
+) -> torch.Tensor:
+  bottom_heights = torch.empty(
+    geom_pos_w.shape[0], device=geom_pos_w.device, dtype=geom_pos_w.dtype
+  )
+  local_z_axis = torch.tensor([[0.0, 0.0, 1.0]], device=geom_pos_w.device)
+  box_signs = torch.tensor(
+    [
+      [-1.0, -1.0, -1.0],
+      [-1.0, -1.0, 1.0],
+      [-1.0, 1.0, -1.0],
+      [-1.0, 1.0, 1.0],
+      [1.0, -1.0, -1.0],
+      [1.0, -1.0, 1.0],
+      [1.0, 1.0, -1.0],
+      [1.0, 1.0, 1.0],
+    ],
+    device=geom_pos_w.device,
+  )
+
+  for geom_idx, geom_type in enumerate(geom_types):
+    geom_type = int(geom_type)
+    if geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+      bottom_heights[geom_idx] = geom_pos_w[geom_idx, 2] - geom_sizes[geom_idx, 0]
+    elif geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
+      axis = quat_apply(geom_quat_w[geom_idx : geom_idx + 1], local_z_axis)[0]
+      half_length = geom_sizes[geom_idx, 1]
+      end_0_z = geom_pos_w[geom_idx, 2] - axis[2] * half_length
+      end_1_z = geom_pos_w[geom_idx, 2] + axis[2] * half_length
+      bottom_heights[geom_idx] = torch.minimum(end_0_z, end_1_z) - geom_sizes[
+        geom_idx, 0
+      ]
+    elif geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+      local_corners = box_signs * geom_sizes[geom_idx : geom_idx + 1]
+      world_corners = quat_apply(
+        geom_quat_w[geom_idx : geom_idx + 1].expand(8, -1), local_corners
+      )
+      world_corners = world_corners + geom_pos_w[geom_idx : geom_idx + 1]
+      bottom_heights[geom_idx] = world_corners[:, 2].min()
+    else:
+      raise ValueError(
+        "Unsupported geom type for ground analysis. "
+        f"Geom type id: {geom_type}."
+      )
+
+  return bottom_heights
+
+
+def analyze_foot_penetration(
+  sim: Simulation,
+  scene: Scene,
+  robot: Entity,
+  robot_joint_indexes: list[int],
+  motion: MotionLoader,
+  clearance: float,
+  foot_geom_pattern: str = G1_FOOT_GEOM_PATTERN,
+  show_progress: bool = True,
+) -> GroundingStats:
+  foot_geom_ids, foot_geom_names = robot.find_geoms(
+    foot_geom_pattern, preserve_order=True
+  )
+  if not foot_geom_ids:
+    raise ValueError(f"No foot geoms matched pattern: {foot_geom_pattern}")
+
+  global_geom_ids = robot.indexing.geom_ids[foot_geom_ids].cpu().numpy()
+  geom_sizes = torch.tensor(
+    sim.mj_model.geom_size[global_geom_ids],
+    dtype=torch.float32,
+    device=sim.device,
+  )
+  geom_types = np.asarray(sim.mj_model.geom_type[global_geom_ids])
+
+  frame_min_foot_z = np.empty(motion.output_frames, dtype=np.float32)
+  frame_iterator = range(motion.output_frames)
+  if show_progress:
+    frame_iterator = tqdm(
+      frame_iterator,
+      total=motion.output_frames,
+      desc="Analyzing foot grounding",
+      unit="frame",
+      ncols=100,
+    )
+
+  scene.reset()
+  for frame_idx in frame_iterator:
+    _write_motion_frame_to_sim(sim, scene, robot, robot_joint_indexes, motion, frame_idx)
+    geom_pose_w = robot.data.geom_pose_w[0, foot_geom_ids]
+    bottom_heights = _compute_geom_bottom_heights(
+      geom_pos_w=geom_pose_w[:, :3],
+      geom_quat_w=geom_pose_w[:, 3:7],
+      geom_sizes=geom_sizes,
+      geom_types=geom_types,
+    )
+    frame_min_foot_z[frame_idx] = float(bottom_heights.min().item())
+
+  global_min_foot_z = float(frame_min_foot_z.min())
+  recommended_delta_z = max(0.0, clearance - global_min_foot_z)
+  return GroundingStats(
+    foot_geom_names=tuple(foot_geom_names),
+    frame_min_foot_z=frame_min_foot_z,
+    global_min_foot_z=global_min_foot_z,
+    recommended_delta_z=recommended_delta_z,
+  )
+
+
+def apply_global_ground_alignment(motion: MotionLoader, stats: GroundingStats) -> None:
+  if stats.recommended_delta_z <= 0.0:
+    return
+  motion.motion_base_poss_input[:, 2] += stats.recommended_delta_z
+  motion.motion_base_poss[:, 2] += stats.recommended_delta_z
+
+
 def run_sim(
   sim: Simulation,
   scene: Scene,
-  joint_names,
+  robot: Entity,
+  robot_joint_indexes: list[int],
   input_file,
   input_fps,
   output_fps,
   output_name,
   render,
   line_range,
+  ground_align: Literal["none", "global"],
+  clearance: float,
   renderer: OffscreenRenderer | None = None,
 ):
+  output_path = Path(output_name)
+  if output_path.suffix != ".npz":
+    output_path = output_path.with_suffix(".npz")
+  video_path = output_path.with_suffix(".mp4")
+
   motion = MotionLoader(
     motion_file=input_file,
     input_fps=input_fps,
@@ -200,8 +445,26 @@ def run_sim(
     line_range=line_range,
   )
 
-  robot: Entity = scene["robot"]
-  robot_joint_indexes = robot.find_joints(joint_names, preserve_order=True)[0]
+  if ground_align == "global":
+    print(
+      f"Analyzing foot penetration with clearance target {clearance:.3f} m..."
+    )
+    grounding_stats = analyze_foot_penetration(
+      sim=sim,
+      scene=scene,
+      robot=robot,
+      robot_joint_indexes=robot_joint_indexes,
+      motion=motion,
+      clearance=clearance,
+    )
+    print(
+      "Grounding analysis complete: "
+      f"min foot bottom z = {grounding_stats.global_min_foot_z:.4f} m, "
+      f"recommended global z offset = {grounding_stats.recommended_delta_z:.4f} m"
+    )
+    apply_global_ground_alignment(motion, grounding_stats)
+  else:
+    print("Ground alignment disabled; using raw motion root heights.")
 
   log: dict[str, Any] = {
     "fps": [output_fps],
@@ -232,34 +495,20 @@ def run_sim(
 
   frame_count = 0
   while not file_saved:
+    frame_idx = motion.current_idx
     (
       (
-        motion_base_pos,
-        motion_base_rot,
+        _motion_base_pos,
+        _motion_base_rot,
         motion_base_lin_vel,
         motion_base_ang_vel,
-        motion_dof_pos,
-        motion_dof_vel,
+        _motion_dof_pos,
+        _motion_dof_vel,
       ),
       reset_flag,
     ) = motion.get_next_state()
 
-    root_states = robot.data.default_root_state.clone()
-    root_states[:, 0:3] = motion_base_pos
-    root_states[:, :2] += scene.env_origins[:, :2]
-    root_states[:, 3:7] = motion_base_rot
-    root_states[:, 7:10] = motion_base_lin_vel
-    root_states[:, 10:] = motion_base_ang_vel
-    robot.write_root_state_to_sim(root_states)
-
-    joint_pos = robot.data.default_joint_pos.clone()
-    joint_vel = robot.data.default_joint_vel.clone()
-    joint_pos[:, robot_joint_indexes] = motion_dof_pos
-    joint_vel[:, robot_joint_indexes] = motion_dof_vel
-    robot.write_joint_state_to_sim(joint_pos, joint_vel)
-
-    sim.forward()
-    scene.update(sim.mj_model.opt.timestep)
+    _write_motion_frame_to_sim(sim, scene, robot, robot_joint_indexes, motion, frame_idx)
     if render and renderer is not None:
       renderer.update(sim.data)
       frames.append(renderer.render())
@@ -305,35 +554,18 @@ def run_sim(
         ):
           log[k] = np.stack(log[k], axis=0)
 
-        print("Saving to /tmp/motion.npz...")
-        np.savez("/tmp/motion.npz", **log)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Saving to {output_path}...")
+        np.savez(output_path, **log)
 
-        print("Uploading to Weights & Biases...")
-        import wandb
-
-        COLLECTION = output_name
-        run = wandb.init(project="csv_to_npz", name=COLLECTION)
-        print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-        REGISTRY = "motions"
-        logged_artifact = run.log_artifact(
-          artifact_or_path="/tmp/motion.npz", name=COLLECTION, type=REGISTRY
-        )
-        run.link_artifact(
-          artifact=logged_artifact,
-          target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}",
-        )
-        print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+        print(f"[INFO]: Motion saved locally: {output_path}")
 
         if render:
           import mediapy as media
 
-          print("Creating video...")
-          media.write_video("./motion.mp4", frames, fps=output_fps)
-
-          print("Logging video to wandb...")
-          wandb.log({"motion_video": wandb.Video("./motion.mp4", format="mp4")})
-
-        wandb.finish()
+          print(f"Creating video at {video_path}...")
+          media.write_video(str(video_path), frames, fps=output_fps)
+          print(f"[INFO]: Video saved locally: {video_path}")
 
 
 def main(
@@ -343,6 +575,8 @@ def main(
   output_fps: float = 50.0,
   device: str = "cuda:0",
   render: bool = False,
+  ground_align: Literal["none", "global"] = "none",
+  clearance: float = 0.01,
   line_range: tuple[int, int] | None = None,
 ):
   """Replay motion from CSV file and output to npz file.
@@ -354,79 +588,30 @@ def main(
     output_fps: Desired output frame rate.
     device: Device to use.
     render: Whether to render the simulation and save a video.
+    ground_align: Ground alignment mode for the motion root.
+    clearance: Target minimum foot-bottom clearance above the ground plane.
     line_range: Range of lines to process from the CSV file.
   """
-  if device.startswith("cuda") and not torch.cuda.is_available():
-    print("[WARNING]: CUDA is not available. Falling back to CPU. This may be slow.")
-    device = "cpu"
-
-  sim_cfg = SimulationCfg()
-  sim_cfg.mujoco.timestep = 1.0 / output_fps
-
-  scene = Scene(unitree_g1_flat_tracking_env_cfg().scene, device=device)
-  model = scene.compile()
-
-  sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)
-
-  scene.initialize(sim.mj_model, sim.model, sim.data)
-
-  renderer = None
-  if render:
-    viewer_cfg = ViewerConfig(
-      height=480,
-      width=640,
-      origin_type=ViewerConfig.OriginType.ASSET_ROOT,
-      entity_name="robot",
-      distance=2.0,
-      elevation=-5.0,
-      azimuth=20,
-    )
-    renderer = OffscreenRenderer(
-      model=sim.mj_model,
-      cfg=viewer_cfg,
-      scene=scene,
-    )
-    renderer.initialize()
+  device = resolve_device(device)
+  sim, scene, renderer = build_tracking_sim(
+    output_fps=output_fps,
+    device=device,
+    render=render,
+  )
+  robot, robot_joint_indexes = get_tracking_robot(scene)
 
   run_sim(
     sim=sim,
     scene=scene,
-    joint_names=[
-      "left_hip_pitch_joint",
-      "left_hip_roll_joint",
-      "left_hip_yaw_joint",
-      "left_knee_joint",
-      "left_ankle_pitch_joint",
-      "left_ankle_roll_joint",
-      "right_hip_pitch_joint",
-      "right_hip_roll_joint",
-      "right_hip_yaw_joint",
-      "right_knee_joint",
-      "right_ankle_pitch_joint",
-      "right_ankle_roll_joint",
-      "waist_yaw_joint",
-      "waist_roll_joint",
-      "waist_pitch_joint",
-      "left_shoulder_pitch_joint",
-      "left_shoulder_roll_joint",
-      "left_shoulder_yaw_joint",
-      "left_elbow_joint",
-      "left_wrist_roll_joint",
-      "left_wrist_pitch_joint",
-      "left_wrist_yaw_joint",
-      "right_shoulder_pitch_joint",
-      "right_shoulder_roll_joint",
-      "right_shoulder_yaw_joint",
-      "right_elbow_joint",
-      "right_wrist_roll_joint",
-      "right_wrist_pitch_joint",
-      "right_wrist_yaw_joint",
-    ],
+    robot=robot,
+    robot_joint_indexes=robot_joint_indexes,
     input_fps=input_fps,
     input_file=input_file,
     output_fps=output_fps,
     output_name=output_name,
     render=render,
+    ground_align=ground_align,
+    clearance=clearance,
     line_range=line_range,
     renderer=renderer,
   )
