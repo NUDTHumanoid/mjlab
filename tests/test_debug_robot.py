@@ -13,6 +13,7 @@ from mjlab.actuator.builtin_actuator import (
 from mjlab.asset_zoo.robots import get_g1_robot_cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.scripts.debug_robot import RobotDebugSession, apply_pose_delta
 from mjlab.viewer.viser.debug_panels import (
   build_actuator_inventory_from_cfg,
   build_control_chain_rows,
@@ -32,6 +33,25 @@ def make_env(entity, name: str, device: str):
   env.device = device
   env.scene = {name: entity}
   return env
+
+
+def make_robot_session(device: str) -> RobotDebugSession:
+  """Create a small initialized robot session for pose-browser tests."""
+  entity = create_entity_from_fixture(
+    "floating_base_articulated",
+    actuator_cfg=BuiltinMotorActuatorCfg(
+      target_names_expr=("joint.*",),
+      effort_limit=10.0,
+    ),
+  )
+  entity, sim = initialize_entity(entity, device)
+  return RobotDebugSession(
+    robot_name="fixture",
+    scene=None,
+    sim=sim,
+    entity=entity,
+    device=device,
+  )
 
 
 def test_build_actuator_inventory_from_g1_cfg() -> None:
@@ -94,3 +114,40 @@ def test_build_control_chain_rows_aligns_action_and_joint_targets(device: str) -
   assert rows[0].processed_action == pytest.approx(0.7)
   assert rows[0].q_des == pytest.approx(0.7)
   assert rows[0].actuator_force is not None
+
+
+def test_apply_pose_delta_updates_only_selected_joint(device: str) -> None:
+  """Pose browser should move only the selected joint away from default."""
+  session = make_robot_session(device)
+
+  result = apply_pose_delta(session, joint_index=1, delta=0.25, clamp=True)
+
+  assert result.joint_name == session.entity.joint_names[1]
+  assert session.entity.data.joint_pos[0, 0].item() == pytest.approx(
+    session.entity.data.default_joint_pos[0, 0].item()
+  )
+  assert session.entity.data.joint_pos[0, 1].item() == pytest.approx(result.q)
+
+
+def test_apply_pose_delta_clamps_to_joint_limits(device: str) -> None:
+  """Large deltas should clamp to the selected joint's kinematic limits."""
+  session = make_robot_session(device)
+
+  result = apply_pose_delta(session, joint_index=0, delta=10.0, clamp=True)
+
+  low, high = result.joint_limit
+  assert low <= result.q <= high
+  assert result.q == pytest.approx(high)
+
+
+def test_apply_pose_delta_zeros_selected_joint_velocity(device: str) -> None:
+  """Pose browser should clear joint velocity before forwarding the new pose."""
+  session = make_robot_session(device)
+  session.entity.write_joint_velocity_to_sim(
+    torch.tensor([[1.0, -2.0]], device=device)
+  )
+  session.sim.forward()
+
+  apply_pose_delta(session, joint_index=1, delta=0.1, clamp=True)
+
+  assert session.entity.data.joint_vel[0, 1].item() == pytest.approx(0.0)
