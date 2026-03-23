@@ -13,7 +13,13 @@ from mjlab.actuator.builtin_actuator import (
 from mjlab.asset_zoo.robots import get_g1_robot_cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.envs.mdp.actions import JointPositionActionCfg
-from mjlab.scripts.debug_robot import RobotDebugSession, apply_pose_delta
+from mjlab.scripts.debug_robot import (
+  HoldReferencePolicy,
+  ManualDeltaPolicy,
+  RobotDebugSession,
+  apply_pose_delta,
+  build_manual_delta_policy,
+)
 from mjlab.viewer.viser.debug_panels import (
   build_actuator_inventory_from_cfg,
   build_control_chain_rows,
@@ -151,3 +157,62 @@ def test_apply_pose_delta_zeros_selected_joint_velocity(device: str) -> None:
   apply_pose_delta(session, joint_index=1, delta=0.1, clamp=True)
 
   assert session.entity.data.joint_vel[0, 1].item() == pytest.approx(0.0)
+
+
+def test_hold_reference_policy_returns_zero_actions(device: str) -> None:
+  """Hold-reference should emit zero raw actions for every environment."""
+  policy = HoldReferencePolicy(action_dim=4, device=device)
+
+  action = policy(torch.ones((2, 3), device=device))
+
+  assert action.shape == (2, 4)
+  assert torch.count_nonzero(action).item() == 0
+
+
+def test_manual_delta_policy_only_changes_selected_joint(device: str) -> None:
+  """Manual-delta policy should only edit one action dimension."""
+  policy = ManualDeltaPolicy(
+    action_dim=6,
+    action_index=2,
+    raw_delta=0.1,
+    device=device,
+  )
+
+  action = policy(torch.zeros((1, 1), device=device))
+
+  assert torch.count_nonzero(action).item() == 1
+  assert action[0, 2].item() == pytest.approx(0.1)
+
+
+def test_build_manual_delta_policy_clamps_joint_delta(device: str) -> None:
+  """Joint-space manual deltas should clamp before conversion to raw action."""
+  entity = create_entity_from_fixture(
+    "floating_base_articulated",
+    actuator_cfg=BuiltinPositionActuatorCfg(
+      target_names_expr=("joint.*",),
+      stiffness=10.0,
+      damping=0.5,
+      effort_limit=20.0,
+    ),
+  )
+  entity, _ = initialize_entity(entity, device)
+  env = make_env(entity, "robot", device)
+  action_term = JointPositionActionCfg(
+    entity_name="robot",
+    actuator_names=("joint.*",),
+    scale=2.0,
+    offset=0.5,
+    use_default_offset=False,
+  ).build(env)
+
+  policy = build_manual_delta_policy(
+    action_term,
+    selected_joint_index=1,
+    joint_delta=1.0,
+    joint_delta_limit=0.25,
+    device=device,
+  )
+  action = policy(torch.zeros((1, 1), device=device))
+
+  assert torch.count_nonzero(action).item() == 1
+  assert action[0, 1].item() == pytest.approx(0.125)
