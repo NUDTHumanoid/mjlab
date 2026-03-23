@@ -18,6 +18,8 @@ from mjlab.scripts.debug_robot import (
   ManualDeltaPolicy,
   RobotDebugSession,
   apply_pose_delta,
+  build_robot_mode_summary,
+  build_task_mode_summary,
   build_manual_delta_policy,
 )
 from mjlab.viewer.viser.debug_panels import (
@@ -216,3 +218,14 @@ def test_build_manual_delta_policy_clamps_joint_delta(device: str) -> None:
 
   assert torch.count_nonzero(action).item() == 1
   assert action[0, 1].item() == pytest.approx(0.125)
+
+
+def test_mode_summaries_explain_position_control() -> None:
+  """UI summaries should explain the teaching path clearly."""
+  robot_summary = build_robot_mode_summary()
+  task_summary = build_task_mode_summary("manual-delta", "zero")
+
+  assert "pose browser" in robot_summary
+  assert "not a balance controller" in robot_summary
+  assert "position targets" in task_summary
+  assert "motor effort" in task_summary

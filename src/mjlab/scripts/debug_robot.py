@@ -163,6 +163,21 @@ def build_manual_delta_policy(
   )
 
 
+def build_robot_mode_summary() -> str:
+  return (
+    "pose browser for learning joint structure. It directly edits joint positions "
+    "and refreshes kinematics, so it is not a balance controller."
+  )
+
+
+def build_task_mode_summary(control_mode: str, agent: str) -> str:
+  return (
+    f"Task mode ({control_mode}, agent={agent}) shows raw actions, position targets, "
+    "joint state, and actuator outputs. On real robots, those position targets are "
+    "still turned into motor effort by the low-level controller."
+  )
+
+
 def create_task_session(cfg: RobotModeConfig) -> TaskDebugSession:
   """Create a one-env task session for control-chain inspection."""
   configure_torch_backends()
@@ -392,6 +407,7 @@ class RobotDebugApp:
       ["Actuators", str(self.session.entity.num_actuators)],
       ["Selected Joint", self.session.entity.joint_names[self.selected_joint_index]],
       ["Control Type", "pose browser (joint position delta)"],
+      ["Summary", build_robot_mode_summary()],
     ]
     return _render_table(["Field", "Value"], rows)
 
@@ -607,6 +623,7 @@ class TaskDebugApp:
       ["Action Dim", str(self.session.action_term.action_dim)],
       ["Selected Joint", self.session.action_term.target_names[self.selected_joint_index]],
       ["Command", command_text or "—"],
+      ["Summary", build_task_mode_summary(self.control_mode, self.cfg.agent)],
     ]
     return _render_table(["Field", "Value"], rows)
 
