@@ -91,6 +91,125 @@ uv run play Mjlab-Your-Task-Id --agent random  # Sends uniform random actions
 When running motion-tracking tasks, add `--motion-file /path/to/motion.npz` to the command.
 
 
+### 4. Local Motion Workflow and Jump Tracking Notes
+
+This repository also supports a fully local motion-tracking workflow without relying on Weights & Biases motion artifacts.
+
+#### Convert CSV motions to local NPZ files
+
+The local `csv_to_npz` workflow was extended with three practical changes:
+
+- It writes directly to `--output-name` instead of assuming a W&B artifact workflow.
+- `--ground-align global` applies a global root-height offset so the foot collision geoms clear the floor.
+- `--clearance` sets the desired minimum foot clearance during that alignment step.
+
+If you want to inspect foot penetration before converting, run:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/jump_forward02_poses.csv \
+  --input-fps 30 \
+  --output-fps 50 \
+  --clearance 0.01
+```
+
+Convert the CSV file into a local `.npz` motion file:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/jump_forward02_poses.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --input-fps 30 \
+  --output-fps 50 \
+  --ground-align global \
+  --clearance 0.01 \
+  --render True
+```
+
+This produces a local `.npz` motion file and, when `--render True` is set, a local `.mp4` preview video as well.
+
+#### Train from a local NPZ motion file
+
+Train a tracking policy directly from a local motion file:
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1 \
+  --env.commands.motion.motion-file /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --env.scene.num-envs 4096 \
+  --agent.logger tensorboard \
+  --agent.upload-model False
+```
+
+Play a local checkpoint against the same local motion file:
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1 \
+  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-03-12_16-26-30/model_7000.pt \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --num-envs 1 \
+  --viewer viser
+```
+
+Use `--no-terminations True` when you want to inspect the full motion even if the policy would otherwise fall early, and add `--video True --video-length 500` to record a rollout.
+
+#### Jump-up / jump-forward tuning on flat tracking
+
+For jump-like motions such as `jump_up` and `jump_forward`, the flat tracking task uses a slightly less conservative reward shaping than the original defaults:
+
+| Parameter | Default | Jump-tuned | Meaning |
+| --- | --- | --- | --- |
+| `motion_global_root_pos.weight` | `0.5` | `1.0` | Makes root-position tracking matter more, so the jump height and global translation stay closer to the reference. |
+| `motion_global_root_pos.std` | `0.3` | `0.4` | Widens the useful reward basin so early jump attempts still receive learning signal instead of collapsing to near-zero reward. |
+| `motion_body_lin_vel.weight` | `1.0` | `1.5` | Emphasizes body linear-velocity tracking, which is important for take-off and landing timing. |
+| `motion_body_lin_vel.std` | `1.0` | `1.5` | Makes the velocity reward more forgiving when the policy is still under-shooting the reference jump speed. |
+| `action_rate_l2.weight` | `-1e-1` | `-3e-2` | Reduces the smoothness penalty so the policy can produce the sharper, more explosive actions needed for jumps. |
+
+These changes are intentionally small: they keep the task recognizable while making it easier to learn motions with stronger vertical or forward impulse.
+
+#### Rough tracking: `Mjlab-Tracking-Rough-Unitree-G1`
+
+`Mjlab-Tracking-Rough-Unitree-G1` is a terrain-aware tracking variant intended for fine-tuning from a flat tracking checkpoint.
+
+Compared with the flat tracking task, it changes four major pieces:
+
+1. Terrain
+   - The scene switches from a flat plane to a generated terrain grid.
+   - The terrain mix is deliberately mild rather than locomotion-hard:
+     - `flat`: `0.35`
+     - `pyramid_stairs`: `0.15` with `step_height_range=(0.0, 0.05)`
+     - `pyramid_stairs_inv`: `0.15` with `step_height_range=(0.0, 0.05)`
+     - `hf_pyramid_slope`: `0.10` with `slope_range=(0.0, 0.3)`
+     - `hf_pyramid_slope_inv`: `0.10` with `slope_range=(0.0, 0.3)`
+     - `random_rough`: `0.10` with `noise_range=(0.01, 0.04)`
+     - `wave_terrain`: `0.05` with `amplitude_range=(0.0, 0.08)`
+   - The initial terrain curriculum is capped to the easier rows with `max_init_terrain_level=2`.
+
+2. Reward shaping
+   - `motion_global_root_pos` becomes XY-only root tracking instead of full XYZ tracking.
+   - `motion_global_root_z_vel` is added to preserve jump timing through vertical root velocity.
+   - `motion_global_root_z_pos` is added as a soft height term so the policy still aims for the reference apex.
+   - `motion_global_root_ori.weight` changes from `0.5 -> 1.0`.
+   - `motion_body_ori.weight` changes from `1.0 -> 1.5`.
+
+3. Domain randomization and contacts
+   - `push_robot` is removed.
+   - `base_com`, `encoder_bias`, and `foot_friction` randomization ranges are narrowed.
+   - Contact limits are increased with `nconmax=60`, `contact_sensor_maxmatch=128`, and `ccd_iterations=200` to better handle uneven landings.
+
+4. Terminations
+   - Flat-ground-specific z-only terminations (`anchor_pos`, `ee_body_pos`) are removed.
+   - `anchor_ori.threshold` is relaxed from `0.8 -> 1.2` so the policy can survive the landing transition on uneven terrain.
+
+A typical local rough-training command looks like this:
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1 \
+  --env.commands.motion.motion-file /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --env.scene.num-envs 4096 \
+  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-03-12_16-26-30/model_7000.pt
+```
+
+
 ## Documentation
 
 Full documentation is available at **[mujocolab.github.io/mjlab](https://mujocolab.github.io/mjlab/)**.
