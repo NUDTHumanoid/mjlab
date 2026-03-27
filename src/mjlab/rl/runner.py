@@ -57,17 +57,16 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     """Save checkpoint.
 
     Extends the base implementation to persist the environment's
-    common_step_counter and to respect the ``upload_model`` config flag.
+    common_step_counter.
     """
     env_state = {"common_step_counter": self.env.unwrapped.common_step_counter}
     infos = {**(infos or {}), "env_state": env_state}
-    # Inline base OnPolicyRunner.save() to conditionally gate W&B upload.
+    # Inline base OnPolicyRunner.save() but remove W&B upload logic.
     saved_dict = self.alg.save()
     saved_dict["iter"] = self.current_learning_iteration
     saved_dict["infos"] = infos
     torch.save(saved_dict, path)
-    if self.cfg["upload_model"]:
-      self.logger.save_model(path, self.current_learning_iteration)
+    # 删除: 原 if self.cfg["upload_model"]: self.logger.save_model(path, self.current_learning_iteration)
 
   def load(
     self,

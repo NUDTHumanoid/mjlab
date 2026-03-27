@@ -11,6 +11,27 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.tasks.tracking.tracking_env_cfg import make_tracking_env_cfg
 
+from mjlab.terrains import TerrainGeneratorCfg, HfPyramidSlopedTerrainCfg, HfRandomUniformTerrainCfg 
+# 自定义地形：随机起伏
+CUSTOM_TERRAIN_CFG = TerrainGeneratorCfg(
+    size=(8.0, 8.0),                 # 每个子地形 8m x 8m
+    border_width=2.0,                # 外边框宽度 2m（足够防止掉落）
+    num_rows=5,                      # 5 行难度等级
+    num_cols=6,                      # 6 列（3列斜坡+3列随机起伏，比例可调）
+    curriculum=True,                 # 课程模式：按列分配地形类型，难度逐行增加
+    difficulty_range=(0.0, 1.0),
+    sub_terrains={
+        "rough": HfRandomUniformTerrainCfg(
+            proportion=1.0,
+            noise_range=(0.02, 0.15),   # 起伏高度范围
+            downsampled_scale=0.2,      # 粗采样间距，使起伏更自然
+            border_width=0.5,
+            horizontal_scale=0.1,
+            vertical_scale=0.005,
+        ),
+    },
+    add_lights=True,
+)
 
 def unitree_g1_flat_tracking_env_cfg(
   has_state_estimation: bool = True,
@@ -98,3 +119,23 @@ def unitree_g1_flat_tracking_env_cfg(
     motion_cmd.sampling_mode = "start"
 
   return cfg
+
+def unitree_g1_rough_tracking_env_cfg(
+    has_state_estimation: bool = True,
+    play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+    """Create Unitree G1 rough terrain tracking configuration."""
+    # 先获取平坦配置
+    cfg = unitree_g1_flat_tracking_env_cfg(has_state_estimation, play)
+    # 覆盖地形为粗糙地形生成器
+    cfg.scene.terrain.terrain_type = "generator"
+    cfg.scene.terrain.terrain_generator = CUSTOM_TERRAIN_CFG
+    # ===== 粗糙地形特有的参数调整（示例，可根据实际需要修改） =====
+    cfg.rewards["motion_global_root_pos"].weight = 2.0   # 原来1.5
+    cfg.rewards["motion_body_lin_vel"].weight = 2.0      # 原来1.5
+    cfg.rewards["motion_body_pos"].weight = 1.5          # 原来1.0
+    cfg.rewards["motion_global_root_ori"].weight = 1.0   # 原来0.5
+    cfg.rewards["motion_body_ori"].weight = 1.5          # 原来1.0
+    cfg.terminations["ee_body_pos"].params["threshold"] = 0.4
+    # ==================================================
+    return cfg

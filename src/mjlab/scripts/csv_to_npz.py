@@ -19,6 +19,8 @@ from mjlab.utils.lab_api.math import (
 from mjlab.viewer.offscreen_renderer import OffscreenRenderer
 from mjlab.viewer.viewer_config import ViewerConfig
 
+# 2026.3.12 修改1
+import os
 
 class MotionLoader:
   def __init__(
@@ -191,6 +193,7 @@ def run_sim(
   render,
   line_range,
   renderer: OffscreenRenderer | None = None,
+  output_dir: str = "source/motions",  # 新增
 ):
   motion = MotionLoader(
     motion_file=input_file,
@@ -305,36 +308,22 @@ def run_sim(
         ):
           log[k] = np.stack(log[k], axis=0)
 
-        print("Saving to /tmp/motion.npz...")
-        np.savez("/tmp/motion.npz", **log)
-
-        print("Uploading to Weights & Biases...")
-        import wandb
-
-        COLLECTION = output_name
-        run = wandb.init(project="csv_to_npz", name=COLLECTION)
-        print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-        REGISTRY = "motions"
-        logged_artifact = run.log_artifact(
-          artifact_or_path="/tmp/motion.npz", name=COLLECTION, type=REGISTRY
-        )
-        run.link_artifact(
-          artifact=logged_artifact,
-          target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}",
-        )
-        print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+        #注释
+        #print("Saving to /tmp/motion.npz...")
+        #np.savez("/tmp/motion.npz", **log)
+        # 修改为
+        os.makedirs(output_dir, exist_ok=True)  # 确保目录存在
+        output_path = os.path.join(output_dir, f"{output_name}.npz")
+        print(f"Saving to {output_path}...")
+        np.savez(output_path, **log)
 
         if render:
           import mediapy as media
-
           print("Creating video...")
-          media.write_video("./motion.mp4", frames, fps=output_fps)
-
-          print("Logging video to wandb...")
-          wandb.log({"motion_video": wandb.Video("./motion.mp4", format="mp4")})
-
-        wandb.finish()
-
+          video_path = os.path.join(output_dir, f"{output_name}.mp4")
+          media.write_video(video_path, frames, fps=output_fps)
+          print(f"Video saved to {video_path}")
+      # 删除 wandb.log 那一行
 
 def main(
   input_file: str,
@@ -344,6 +333,7 @@ def main(
   device: str = "cuda:0",
   render: bool = False,
   line_range: tuple[int, int] | None = None,
+  output_dir: str = "source/motions",  # 新增参数
 ):
   """Replay motion from CSV file and output to npz file.
 
@@ -429,6 +419,7 @@ def main(
     render=render,
     line_range=line_range,
     renderer=renderer,
+    output_dir=output_dir,  # 新增
   )
 
 

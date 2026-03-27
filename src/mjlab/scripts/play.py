@@ -13,7 +13,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_wandb_checkpoint_path
+# 删除: from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
@@ -22,12 +22,14 @@ from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 @dataclass(frozen=True)
 class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
-  registry_name: str | None = None
-  wandb_run_path: str | None = None
-  wandb_checkpoint_name: str | None = None
-  """Optional checkpoint name within the W&B run to load (e.g. 'model_4000.pt')."""
-  checkpoint_file: str | None = None
+  # 删除: registry_name, wandb_run_path, wandb_checkpoint_name, checkpoint_file
+  # 新添: checkpoint 字段，用于指定本地 checkpoint 路径或自动选择
+  checkpoint: str | None = None
+  """Path to a specific checkpoint file (e.g., 'logs/rsl_rl/exp1/2025-03-13_10-30-00/model_30000.pt').
+     If None, the latest checkpoint from the latest run under logs/rsl_rl/{experiment_name} will be used."""
   motion_file: str | None = None
+  """Motion file path or name. If a name without path is given (e.g., 'jump_up01_poses'),
+     the script will look for 'source/motions/{name}.npz'. Absolute paths are used as is."""
   num_envs: int | None = None
   device: str | None = None
   video: bool = False
@@ -41,6 +43,56 @@ class PlayConfig:
 
   # Internal flag used by demo script.
   _demo_mode: tyro.conf.Suppress[bool] = False
+
+
+def find_latest_checkpoint(experiment_name: str) -> Path | None:
+  """Find the latest checkpoint under logs/rsl_rl/{experiment_name}/.
+     Returns the path to the checkpoint with the largest iteration number in the newest run directory.
+  """
+  log_root = Path("logs") / "rsl_rl" / experiment_name
+  if not log_root.exists():
+    return None
+
+  # Get all run directories (timestamped) sorted by name (which includes datetime)
+  run_dirs = [d for d in log_root.iterdir() if d.is_dir()]
+  if not run_dirs:
+    return None
+  # Sort descending so the newest (largest timestamp) is first
+  run_dirs.sort(reverse=True)
+  latest_run_dir = run_dirs[0]
+
+  # Find all .pt files in the latest run directory that match "model_*.pt"
+  checkpoint_files = list(latest_run_dir.glob("model_*.pt"))
+  if not checkpoint_files:
+    return None
+
+  # Extract iteration numbers from filenames (e.g., model_30000.pt -> 30000)
+  def get_iter(p: Path) -> int:
+    try:
+      return int(p.stem.split('_')[1])
+    except (IndexError, ValueError):
+      return 0
+
+  # Select the checkpoint with the largest iteration number
+  latest_checkpoint = max(checkpoint_files, key=get_iter)
+  return latest_checkpoint
+
+
+def resolve_motion_file(motion_spec: str | None) -> str | None:
+  """Resolve motion file path. If motion_spec is None, return None.
+     If motion_spec is an existing file, return its absolute path.
+     Otherwise, assume it's a name and look for source/motions/{name}.npz.
+  """
+  if motion_spec is None:
+    return None
+  path = Path(motion_spec)
+  if path.exists():
+    return str(path.absolute())
+  # Try default location: source/motions/{motion_spec}.npz
+  default_path = Path("source/motions") / f"{motion_spec}.npz"
+  if default_path.exists():
+    return str(default_path.absolute())
+  raise FileNotFoundError(f"Motion file not found: {motion_spec} (tried as absolute and in source/motions/)")
 
 
 def run_play(task_id: str, cfg: PlayConfig):
@@ -74,73 +126,39 @@ def run_play(task_id: str, cfg: PlayConfig):
     motion_cmd = env_cfg.commands["motion"]
     assert isinstance(motion_cmd, MotionCommandCfg)
 
-    # Check for local motion file first (works for both dummy and trained modes).
-    if cfg.motion_file is not None and Path(cfg.motion_file).exists():
-      print(f"[INFO]: Using local motion file: {cfg.motion_file}")
-      motion_cmd.motion_file = cfg.motion_file
-    elif DUMMY_MODE:
-      if not cfg.registry_name:
-        raise ValueError(
-          "Tracking tasks require either:\n"
-          "  --motion-file /path/to/motion.npz (local file)\n"
-          "  --registry-name your-org/motions/motion-name (download from WandB)"
-        )
-      # Check if the registry name includes alias, if not, append ":latest".
-      registry_name = cfg.registry_name
-      if ":" not in registry_name:
-        registry_name = registry_name + ":latest"
-      import wandb
-
-      api = wandb.Api()
-      artifact = api.artifact(registry_name)
-      motion_cmd.motion_file = str(Path(artifact.download()) / "motion.npz")
+    # Resolve motion file (supports name or path)
+    if cfg.motion_file is not None:
+      resolved_motion = resolve_motion_file(cfg.motion_file)
+      print(f"[INFO]: Using motion file: {resolved_motion}")
+      motion_cmd.motion_file = resolved_motion
     else:
-      if cfg.motion_file is not None:
-        print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
-        motion_cmd.motion_file = cfg.motion_file
-      else:
-        import wandb
-
-        api = wandb.Api()
-        if cfg.wandb_run_path is None and cfg.checkpoint_file is not None:
-          raise ValueError(
-            "Tracking tasks require `motion_file` when using `checkpoint_file`, "
-            "or provide `wandb_run_path` so the motion artifact can be resolved."
-          )
-        if cfg.wandb_run_path is not None:
-          wandb_run = api.run(str(cfg.wandb_run_path))
-          art = next(
-            (a for a in wandb_run.used_artifacts() if a.type == "motions"), None
-          )
-          if art is None:
-            raise RuntimeError("No motion artifact found in the run.")
-          motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
+      # For trained mode, we might need to infer from checkpoint? But usually motion is required.
+      # We'll require explicit --motion-file for tracking tasks.
+      raise ValueError(
+        "Tracking tasks require a motion file. Provide --motion-file <path_or_name>."
+      )
 
   log_dir: Path | None = None
   resume_path: Path | None = None
   if TRAINED_MODE:
-    log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
-    if cfg.checkpoint_file is not None:
-      resume_path = Path(cfg.checkpoint_file)
+    if cfg.checkpoint is not None:
+      # User specified checkpoint path
+      resume_path = Path(cfg.checkpoint)
       if not resume_path.exists():
         raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
-      print(f"[INFO]: Loading checkpoint: {resume_path.name}")
+      log_dir = resume_path.parent
+      print(f"[INFO]: Loading specified checkpoint: {resume_path.name}")
     else:
-      if cfg.wandb_run_path is None:
-        raise ValueError(
-          "`wandb_run_path` is required when `checkpoint_file` is not provided."
+      # Auto-detect latest checkpoint
+      latest_checkpoint = find_latest_checkpoint(agent_cfg.experiment_name)
+      if latest_checkpoint is None:
+        raise FileNotFoundError(
+          f"No checkpoint found under logs/rsl_rl/{agent_cfg.experiment_name}/. "
+          "Please train a policy first or provide --checkpoint explicitly."
         )
-      resume_path, was_cached = get_wandb_checkpoint_path(
-        log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name
-      )
-      # Extract run_id and checkpoint name from path for display.
-      run_id = resume_path.parent.name
-      checkpoint_name = resume_path.name
-      cached_str = "cached" if was_cached else "downloaded"
-      print(
-        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
-      )
-    log_dir = resume_path.parent
+      resume_path = latest_checkpoint
+      log_dir = resume_path.parent
+      print(f"[INFO]: Auto-detected latest checkpoint: {resume_path}")
 
   if cfg.num_envs is not None:
     env_cfg.scene.num_envs = cfg.num_envs
@@ -225,9 +243,7 @@ def main():
     config=mjlab.TYRO_FLAGS,
   )
 
-  # Parse the rest of the arguments + allow overriding env_cfg and agent_cfg.
-  agent_cfg = load_rl_cfg(chosen_task)
-
+  # Parse the rest of the arguments
   args = tyro.cli(
     PlayConfig,
     args=remaining_args,
@@ -235,7 +251,7 @@ def main():
     prog=sys.argv[0] + f" {chosen_task}",
     config=mjlab.TYRO_FLAGS,
   )
-  del remaining_args, agent_cfg
+  del remaining_args
 
   run_play(chosen_task, args)
 

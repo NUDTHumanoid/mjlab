@@ -209,7 +209,7 @@ def make_tracking_env_cfg() -> ManagerBasedRlEnvCfg:
   rewards: dict[str, RewardTermCfg] = {
     "motion_global_root_pos": RewardTermCfg(
       func=mdp.motion_global_anchor_position_error_exp,
-      weight=0.5,
+      weight=1.5,#修改，之前是0.5
       params={"command_name": "motion", "std": 0.3},
     ),
     "motion_global_root_ori": RewardTermCfg(
@@ -229,7 +229,7 @@ def make_tracking_env_cfg() -> ManagerBasedRlEnvCfg:
     ),
     "motion_body_lin_vel": RewardTermCfg(
       func=mdp.motion_global_body_linear_velocity_error_exp,
-      weight=1.0,
+      weight=1.0,#修改，之前是1.0
       params={"command_name": "motion", "std": 1.0},
     ),
     "motion_body_ang_vel": RewardTermCfg(
@@ -237,7 +237,7 @@ def make_tracking_env_cfg() -> ManagerBasedRlEnvCfg:
       weight=1.0,
       params={"command_name": "motion", "std": 3.14},
     ),
-    "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=-1e-1),
+    "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=-1e-2),#修改，之前是-1e-1
     "joint_limit": RewardTermCfg(
       func=mdp.joint_pos_limits,
       weight=-10.0,
@@ -300,8 +300,8 @@ def make_tracking_env_cfg() -> ManagerBasedRlEnvCfg:
       azimuth=120.0,
     ),
     sim=SimulationCfg(
-      nconmax=35,
-      njmax=250,
+      nconmax=128,#修改，之前是35
+      njmax=400,#修改，之前是250
       mujoco=MujocoCfg(
         timestep=0.005,
         iterations=10,
