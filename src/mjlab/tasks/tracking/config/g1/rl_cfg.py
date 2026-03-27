@@ -44,3 +44,12 @@ def unitree_g1_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     num_steps_per_env=24,
     max_iterations=30_000,
   )
+
+
+def unitree_g1_crouch_to_lie_down_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for Unitree G1 crouch-to-lie-down task."""
+  cfg = unitree_g1_tracking_ppo_runner_cfg()
+  cfg.experiment_name = "g1_tracking_crouch_to_lie_down"
+  cfg.num_steps_per_env = 64
+  cfg.max_iterations = 20_000
+  return cfg

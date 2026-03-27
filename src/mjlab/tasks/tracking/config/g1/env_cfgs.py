@@ -98,3 +98,26 @@ def unitree_g1_flat_tracking_env_cfg(
     motion_cmd.sampling_mode = "start"
 
   return cfg
+
+
+def unitree_g1_flat_crouch_to_lie_down_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create Unitree G1 crouch-to-lie-down tracking configuration."""
+  cfg = unitree_g1_flat_tracking_env_cfg(play=play)
+
+  motion_cmd = cfg.commands["motion"]
+  assert isinstance(motion_cmd, MotionCommandCfg)
+  motion_cmd.sampling_mode = "start"
+  motion_cmd.pose_range = {}
+  motion_cmd.velocity_range = {}
+  motion_cmd.joint_position_range = (0.0, 0.0)
+
+  if not play:
+    cfg.episode_length_s = 6.5
+    cfg.terminations["anchor_pos"].params["threshold"] = 0.35
+    cfg.terminations["ee_body_pos"].params["threshold"] = 0.35
+    cfg.terminations["anchor_ori"].params["threshold"] = 1.0
+    cfg.sim.nconmax = 55
+
+  return cfg
