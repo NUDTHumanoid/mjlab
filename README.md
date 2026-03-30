@@ -114,8 +114,28 @@ script is a data-processing step that:
 - Converts all joint DOF columns from degrees to radians.
 - Writes a plain numeric CSV in the format expected by `csv_to_npz`.
 
+Important: `sonic2mimic.py` only converts representation and units. It does not
+resample time. If the source SONIC/BONES CSV is `120 fps`, the generated
+`*_mimic.csv` is still `120 fps`.
+
 Optional: add `--outputs /path/to/out.csv` to choose the output file name, or
 `--z-offset 0.02` to apply a constant vertical offset after scaling.
+
+`sonic2mimic.py` also supports batch conversion. In batch mode it recursively
+scans `--inputm` for `.csv` files, skips files that already end with
+`_mimic.csv`, and writes matching `_mimic.csv` outputs under `--outputm` while
+preserving the relative directory structure. If `--outputm` is omitted, the
+converted files are written next to the source CSV files.
+```bvh
+Frames: 595
+Frame Time: 0.008333 #broad_jump_004__A359_M.bvh,0.008333 ≈ 1 / 120fps
+```
+
+```bash
+python src/mjlab/scripts/sonic2mimic.py \
+  --inputm /home/nubot/workspace/mjlab/datasets/csv/jumpforward \
+  --outputm /home/nubot/workspace/mjlab/datasets/csv_mimic/jumpforward
+```
 
 If your source file is already a mimic-style numeric CSV, you can skip this step.
 
@@ -130,6 +150,11 @@ There are two related scripts in this step:
   and optionally renders an `.mp4` preview. When `--ground-align global` is enabled, it runs the
   same foot-ground analysis internally and applies one global root `z` offset so the minimum
   foot-bottom clearance reaches the requested target.
+
+Important for SONIC/BONES data: treat the converted `*_mimic.csv` as `120 fps`
+input unless you know the original source was exported at a different frame
+rate. In other words, for SONIC-derived mimic CSV files, use `--input-fps 120`
+when running `analyze_foot_penetration.py` or `csv_to_npz.py`.
 
 About `--ground-align` and `--clearance`:
 
@@ -146,7 +171,7 @@ If you want to inspect foot penetration before converting, run:
 ```bash
 MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
   --input-file /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052_mimic.csv \
-  --input-fps 30 \
+  --input-fps 120 \
   --output-fps 50 \
   --clearance 0.01
 ```
@@ -157,7 +182,7 @@ Convert the mimic CSV file into a local `.npz` motion file:
 MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
   --input-file /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052_mimic.csv \
   --output-name /home/nubot/workspace/mjlab/datasets/npz/body_stretch_3_002__A052.npz \
-  --input-fps 30 \
+  --input-fps 120 \
   --output-fps 50 \
   --ground-align global \
   --clearance 0.01 \
@@ -165,6 +190,22 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
 ```
 
 This produces a local `.npz` motion file and, when `--render True` is set, a local `.mp4` preview video as well. If you do not need automatic ground alignment, you can omit `--ground-align global --clearance 0.01`.
+
+`csv_to_npz.py` also supports batch conversion, similar to `sonic2mimic.py`. In
+batch mode it recursively scans `--inputm` for `.csv` files and writes matching
+`.npz` outputs under `--outputm` while preserving the relative directory
+structure. If `--outputm` is omitted, the `.npz` files are written next to the
+input CSV files. It automatically skips non-numeric/header CSV files such as the
+original SONIC source exports and converts only mimic-style numeric CSV files.
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --inputm /home/nubot/workspace/mjlab/datasets/csv/jumpforward \
+  --outputm /home/nubot/workspace/mjlab/datasets/npz/jumpforward \
+  --input-fps 120 \
+  --output-fps 50 \
+  --render True
+```
 
 #### Train from a local NPZ motion file
 

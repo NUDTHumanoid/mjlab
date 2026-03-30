@@ -65,6 +65,32 @@ class GroundingStats:
   recommended_delta_z: float
 
 
+def collect_csv_files(input_dir: Path) -> list[Path]:
+  return sorted(p for p in input_dir.rglob("*.csv") if p.is_file())
+
+
+def is_numeric_motion_csv(path: Path) -> bool:
+  try:
+    with path.open("r", encoding="utf-8-sig") as f:
+      for line in f:
+        stripped = line.strip()
+        if not stripped:
+          continue
+        for value in stripped.split(","):
+          float(value)
+        return True
+  except (OSError, UnicodeDecodeError, ValueError):
+    return False
+  return False
+
+
+def resolve_batch_output(
+  input_root: Path, output_root: Path, input_file: Path
+) -> Path:
+  relative = input_file.relative_to(input_root)
+  return output_root / relative.parent / f"{input_file.stem}.npz"
+
+
 class MotionLoader:
   def __init__(
     self,
@@ -569,8 +595,10 @@ def run_sim(
 
 
 def main(
-  input_file: str,
-  output_name: str,
+  input_file: str | None = None,
+  output_name: str | None = None,
+  inputm: str | None = None,
+  outputm: str | None = None,
   input_fps: float = 30.0,
   output_fps: float = 50.0,
   device: str = "cuda:0",
@@ -582,8 +610,10 @@ def main(
   """Replay motion from CSV file and output to npz file.
 
   Args:
-    input_file: Path to the input CSV file.
-    output_name: Path to the output npz file.
+    input_file: Path to the input CSV file in single-file mode.
+    output_name: Path to the output npz file in single-file mode.
+    inputm: Directory containing input CSV files in batch mode.
+    outputm: Output directory for batch mode. If omitted, writes next to input CSVs.
     input_fps: Frame rate of the CSV file.
     output_fps: Desired output frame rate.
     device: Device to use.
@@ -592,6 +622,15 @@ def main(
     clearance: Target minimum foot-bottom clearance above the ground plane.
     line_range: Range of lines to process from the CSV file.
   """
+  using_single = input_file is not None or output_name is not None
+  using_batch = inputm is not None or outputm is not None
+  if using_single == using_batch:
+    raise ValueError(
+      "Use exactly one mode: (--input-file --output-name) or (--inputm [--outputm])."
+    )
+  if using_single and (input_file is None or output_name is None):
+    raise ValueError("Single-file mode requires both --input-file and --output-name.")
+
   device = resolve_device(device)
   sim, scene, renderer = build_tracking_sim(
     output_fps=output_fps,
@@ -599,22 +638,96 @@ def main(
     render=render,
   )
   robot, robot_joint_indexes = get_tracking_robot(scene)
+  try:
+    if using_single:
+      assert input_file is not None
+      assert output_name is not None
+      run_sim(
+        sim=sim,
+        scene=scene,
+        robot=robot,
+        robot_joint_indexes=robot_joint_indexes,
+        input_fps=input_fps,
+        input_file=input_file,
+        output_fps=output_fps,
+        output_name=output_name,
+        render=render,
+        ground_align=ground_align,
+        clearance=clearance,
+        line_range=line_range,
+        renderer=renderer,
+      )
+      return
 
-  run_sim(
-    sim=sim,
-    scene=scene,
-    robot=robot,
-    robot_joint_indexes=robot_joint_indexes,
-    input_fps=input_fps,
-    input_file=input_file,
-    output_fps=output_fps,
-    output_name=output_name,
-    render=render,
-    ground_align=ground_align,
-    clearance=clearance,
-    line_range=line_range,
-    renderer=renderer,
-  )
+    assert inputm is not None
+    input_root = Path(inputm)
+    if not input_root.exists():
+      raise FileNotFoundError(f"Batch input directory not found: {input_root}")
+    if not input_root.is_dir():
+      raise ValueError(f"Batch input must be a directory: {input_root}")
+
+    output_root = Path(outputm) if outputm is not None else input_root
+    files = collect_csv_files(input_root)
+    if not files:
+      print(f"[INFO]: No CSV files found in: {input_root}")
+      return
+
+    numeric_files = [path for path in files if is_numeric_motion_csv(path)]
+    numeric_file_set = set(numeric_files)
+    skipped_files = [path for path in files if path not in numeric_file_set]
+    if not numeric_files:
+      print(f"[INFO]: No numeric motion CSV files found in: {input_root}")
+      if skipped_files:
+        print(
+          f"[INFO]: Skipped {len(skipped_files)} non-numeric/header CSV files."
+        )
+      return
+
+    print(
+      f"[INFO]: Found {len(files)} CSV files in batch input: {input_root} "
+      f"({len(numeric_files)} numeric motion CSVs, {len(skipped_files)} skipped)"
+    )
+    if skipped_files:
+      print("[INFO]: Skipping non-numeric/header CSV files such as SONIC source CSVs.")
+
+    failed_files: list[tuple[Path, str]] = []
+    converted_count = 0
+    for src in numeric_files:
+      dst = resolve_batch_output(input_root, output_root, src)
+      print(f"\n[INFO]: Converting {src} -> {dst}")
+      try:
+        run_sim(
+          sim=sim,
+          scene=scene,
+          robot=robot,
+          robot_joint_indexes=robot_joint_indexes,
+          input_fps=input_fps,
+          input_file=str(src),
+          output_fps=output_fps,
+          output_name=str(dst),
+          render=render,
+          ground_align=ground_align,
+          clearance=clearance,
+          line_range=line_range,
+          renderer=renderer,
+        )
+        converted_count += 1
+      except Exception as exc:
+        failed_files.append((src, str(exc)))
+        print(f"[ERROR]: Failed to convert {src}: {exc}")
+
+    print(
+      f"\n[DONE]: Converted {converted_count}/{len(numeric_files)} numeric motion CSV files."
+    )
+    if skipped_files:
+      print(f"[INFO]: Skipped {len(skipped_files)} non-numeric/header CSV files.")
+    if failed_files:
+      print(f"[WARN]: {len(failed_files)} files failed during conversion:")
+      for src, message in failed_files:
+        print(f"  - {src}: {message}")
+  finally:
+    if renderer is not None:
+      renderer.close()
 
 
 if __name__ == "__main__":
