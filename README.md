@@ -95,30 +95,68 @@ When running motion-tracking tasks, add `--motion-file /path/to/motion.npz` to t
 
 This repository also supports a fully local motion-tracking workflow without relying on Weights & Biases motion artifacts.
 
-#### Convert CSV motions to local NPZ files
+#### Convert SONIC/BONES CSV to mimic-compatible CSV
 
-The local `csv_to_npz` workflow was extended with three practical changes:
+If your source motion comes from SONIC/BONES-style CSV export, first convert it into
+the mimic-compatible numeric CSV expected by the downstream motion tools:
 
-- It writes directly to `--output-name` instead of assuming a W&B artifact workflow.
-- `--ground-align global` applies a global root-height offset so the foot collision geoms clear the floor.
-- `--clearance` sets the desired minimum foot clearance during that alignment step.
+```bash
+python src/mjlab/scripts/sonic2mimic.py \
+  --inputs /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052.csv
+```
+
+This writes `/path/to/input_mimic.csv` next to the source file by default. The
+script is a data-processing step that:
+
+- Validates that the required SONIC/BONES columns are present.
+- Converts `root_translateX/Y/Z` using a fixed position scale of `0.01`.
+- Converts `root_rotateX/Y/Z` from Euler degrees to quaternion using a fixed `ZYX` composition order.
+- Converts all joint DOF columns from degrees to radians.
+- Writes a plain numeric CSV in the format expected by `csv_to_npz`.
+
+Optional: add `--outputs /path/to/out.csv` to choose the output file name, or
+`--z-offset 0.02` to apply a constant vertical offset after scaling.
+
+If your source file is already a mimic-style numeric CSV, you can skip this step.
+
+#### Convert mimic CSV motions to local NPZ files
+
+There are two related scripts in this step:
+
+- `analyze_foot_penetration.py`: diagnostic only. It loads a mimic-style CSV, evaluates the
+  lowest foot-bottom height against the ground plane, prints the worst frames, and reports a
+  recommended global root-height lift. It does not write an `.npz` file.
+- `csv_to_npz.py`: conversion script. It turns a mimic-style CSV into a local `.npz` motion file,
+  and optionally renders an `.mp4` preview. When `--ground-align global` is enabled, it runs the
+  same foot-ground analysis internally and applies one global root `z` offset so the minimum
+  foot-bottom clearance reaches the requested target.
+
+About `--ground-align` and `--clearance`:
+
+- `--ground-align none`: use the raw root heights from the CSV.
+- `--ground-align global`: analyze the whole motion and apply one global upward offset if needed.
+- `--clearance 0.01`: set the target minimum foot-bottom clearance to `0.01 m` (1 cm).
+
+You do not need to run `analyze_foot_penetration.py` before `csv_to_npz.py`. The standalone
+analysis script is optional and is mainly useful when you want to inspect the worst frames or tune
+the clearance value before conversion.
 
 If you want to inspect foot penetration before converting, run:
 
 ```bash
 MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
-  --input-file /home/nubot/workspace/mjlab/datasets/csv/jump_forward02_poses.csv \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052_mimic.csv \
   --input-fps 30 \
   --output-fps 50 \
   --clearance 0.01
 ```
 
-Convert the CSV file into a local `.npz` motion file:
+Convert the mimic CSV file into a local `.npz` motion file:
 
 ```bash
 MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
-  --input-file /home/nubot/workspace/mjlab/datasets/csv/jump_forward02_poses.csv \
-  --output-name /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052_mimic.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/body_stretch_3_002__A052.npz \
   --input-fps 30 \
   --output-fps 50 \
   --ground-align global \
@@ -126,7 +164,7 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
   --render True
 ```
 
-This produces a local `.npz` motion file and, when `--render True` is set, a local `.mp4` preview video as well.
+This produces a local `.npz` motion file and, when `--render True` is set, a local `.mp4` preview video as well. If you do not need automatic ground alignment, you can omit `--ground-align global --clearance 0.01`.
 
 #### Train from a local NPZ motion file
 
