@@ -26,6 +26,7 @@ class TrainConfig:
   env: ManagerBasedRlEnvCfg
   agent: RslRlBaseRunnerCfg
   registry_name: str | None = None
+  checkpoint_file: str | None = None
   video: bool = False
   video_length: int = 200
   video_interval: int = 2000
@@ -111,8 +112,19 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   log_root_path = log_dir.parent  # Go up from specific run dir to experiment dir.
 
   resume_path: Path | None = None
-  if cfg.agent.resume:
-    if cfg.wandb_run_path is not None:
+  should_resume = (
+    cfg.agent.resume
+    or cfg.checkpoint_file is not None
+    or cfg.wandb_run_path is not None
+  )
+  if should_resume:
+    if cfg.checkpoint_file is not None:
+      resume_path = Path(cfg.checkpoint_file).expanduser()
+      if not resume_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
+      if rank == 0:
+        print(f"[INFO]: Loading checkpoint from CLI: {resume_path}")
+    elif cfg.wandb_run_path is not None:
       # Load checkpoint from W&B.
       resume_path, was_cached = get_wandb_checkpoint_path(
         log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name

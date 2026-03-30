@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,18 +25,209 @@ if TYPE_CHECKING:
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
-def randomize_terrain(env: ManagerBasedRlEnv, env_ids: torch.Tensor | None) -> None:
+def randomize_terrain(
+  env: ManagerBasedRlEnv,
+  env_ids: torch.Tensor | None,
+  max_terrain_level: int | None = None,
+  within_patch_xy_range: tuple[float, float] | None = None,
+) -> None:
   """Randomize the sub-terrain for each environment on reset.
 
-  This picks a random terrain type (column) and difficulty level (row) for each
-  environment. Useful for play/evaluation mode to test on varied terrains.
+  By default this picks a random terrain type (column) and difficulty level (row)
+  for each environment. Optionally it can cap the sampled terrain level and apply
+  an additional XY translation within the selected terrain patch. The latter is
+  useful for tracking tasks because it moves the whole reference motion and robot
+  together inside a patch instead of only perturbing the robot away from the
+  reference.
   """
   if env_ids is None:
     env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
 
   terrain = env.scene.terrain
-  if terrain is not None:
+  if terrain is None or terrain.terrain_origins is None or terrain.env_origins is None:
+    return
+
+  num_rows, num_cols = terrain.terrain_origins.shape[:2]
+  num_envs = len(env_ids)
+
+  if max_terrain_level is None:
     terrain.randomize_env_origins(env_ids)
+  else:
+    max_level = min(max_terrain_level, num_rows - 1)
+    terrain.terrain_levels[env_ids] = torch.randint(
+      0, max_level + 1, (num_envs,), device=env.device
+    )
+    terrain.terrain_types[env_ids] = torch.randint(
+      0, num_cols, (num_envs,), device=env.device
+    )
+    terrain.env_origins[env_ids] = terrain.terrain_origins[
+      terrain.terrain_levels[env_ids], terrain.terrain_types[env_ids]
+    ]
+
+  if within_patch_xy_range is not None:
+    lower, upper = within_patch_xy_range
+    offsets_xy = sample_uniform(lower, upper, (num_envs, 2), device=env.device)
+    terrain.env_origins[env_ids, :2] += offsets_xy
+
+
+class stratified_terrain_placement:
+  """Assign environments to terrain patches and local slots uniformly.
+
+  Unlike IID terrain randomization, this event tries to keep the full batch spread
+  evenly over all active terrain patches. Within each patch it lays environments out
+  on a deterministic local grid so coverage is broad even when many envs share the
+  same terrain type and difficulty. Because tracking commands use ``env_origins`` as
+  the reference frame offset, moving ``env_origins`` moves both the robot and the
+  reference motion together.
+  """
+
+  def __init__(self, cfg, env: ManagerBasedRlEnv):
+    self._num_envs = env.num_envs
+    self._device = env.device
+    self._max_terrain_level = cfg.params.get("max_terrain_level", None)
+    self._patch_margin = float(cfg.params.get("patch_margin", 0.75))
+    self._local_grid_jitter = float(cfg.params.get("local_grid_jitter", 0.0))
+    self._reshuffle_every_n_resets = int(cfg.params.get("reshuffle_every_n_resets", 0))
+    self._shuffle_patch_order = bool(cfg.params.get("shuffle_patch_order", False))
+
+    self._assignment_epoch = 0
+    self._reset_call_count = 0
+    self._assignment_ready = False
+
+    self._terrain_levels = torch.zeros(
+      self._num_envs, dtype=torch.long, device=self._device
+    )
+    self._terrain_types = torch.zeros(
+      self._num_envs, dtype=torch.long, device=self._device
+    )
+    self._offsets_xy = torch.zeros((self._num_envs, 2), device=self._device)
+
+  def _resolve_env_ids(self, env_ids: torch.Tensor | slice | None) -> torch.Tensor:
+    if env_ids is None:
+      return torch.arange(self._num_envs, device=self._device, dtype=torch.long)
+    if isinstance(env_ids, slice):
+      return torch.arange(self._num_envs, device=self._device, dtype=torch.long)[env_ids]
+    return env_ids.to(device=self._device, dtype=torch.long)
+
+  def _active_patch_pairs(self, terrain) -> torch.Tensor:
+    assert terrain.terrain_origins is not None
+    num_rows, num_cols = terrain.terrain_origins.shape[:2]
+    if self._max_terrain_level is None:
+      max_level = num_rows - 1
+    else:
+      max_level = min(self._max_terrain_level, num_rows - 1)
+
+    row_ids = torch.arange(max_level + 1, device=self._device, dtype=torch.long)
+    col_ids = torch.arange(num_cols, device=self._device, dtype=torch.long)
+    grid_rows, grid_cols = torch.meshgrid(row_ids, col_ids, indexing="ij")
+    pairs = torch.stack([grid_rows.reshape(-1), grid_cols.reshape(-1)], dim=-1)
+    if self._shuffle_patch_order and pairs.shape[0] > 1:
+      pairs = pairs[torch.randperm(pairs.shape[0], device=self._device)]
+    return pairs
+
+  def _local_grid_offsets(self, count: int, half_extent_x: float, half_extent_y: float) -> torch.Tensor:
+    if count <= 0:
+      return torch.zeros((0, 2), device=self._device)
+    if count == 1:
+      return torch.zeros((1, 2), device=self._device)
+
+    grid_cols = math.ceil(math.sqrt(count))
+    grid_rows = math.ceil(count / grid_cols)
+    xs = torch.linspace(-half_extent_x, half_extent_x, grid_cols, device=self._device)
+    ys = torch.linspace(-half_extent_y, half_extent_y, grid_rows, device=self._device)
+    grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+    offsets = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=-1)[:count]
+
+    if self._local_grid_jitter > 0.0:
+      cell_dx = 0.0 if grid_cols <= 1 else (2.0 * half_extent_x) / (grid_cols - 1)
+      cell_dy = 0.0 if grid_rows <= 1 else (2.0 * half_extent_y) / (grid_rows - 1)
+      jitter_x = min(self._local_grid_jitter, 0.35 * cell_dx) if cell_dx > 0.0 else 0.0
+      jitter_y = min(self._local_grid_jitter, 0.35 * cell_dy) if cell_dy > 0.0 else 0.0
+      if jitter_x > 0.0 or jitter_y > 0.0:
+        jitter = torch.zeros_like(offsets)
+        if jitter_x > 0.0:
+          jitter[:, 0] = sample_uniform(
+            -jitter_x, jitter_x, (count,), device=self._device
+          )
+        if jitter_y > 0.0:
+          jitter[:, 1] = sample_uniform(
+            -jitter_y, jitter_y, (count,), device=self._device
+          )
+        offsets = offsets + jitter
+        offsets[:, 0] = torch.clamp(offsets[:, 0], -half_extent_x, half_extent_x)
+        offsets[:, 1] = torch.clamp(offsets[:, 1], -half_extent_y, half_extent_y)
+
+    return offsets
+
+  def _recompute_assignments(self, env: ManagerBasedRlEnv) -> None:
+    terrain = env.scene.terrain
+    if terrain is None or terrain.terrain_origins is None:
+      return
+
+    active_pairs = self._active_patch_pairs(terrain)
+    if active_pairs.numel() == 0:
+      return
+
+    terrain_cfg = terrain.cfg.terrain_generator
+    size_x, size_y = (8.0, 8.0)
+    if terrain_cfg is not None:
+      size_x, size_y = terrain_cfg.size
+    half_extent_x = max(float(size_x) * 0.5 - self._patch_margin, 0.0)
+    half_extent_y = max(float(size_y) * 0.5 - self._patch_margin, 0.0)
+
+    env_indices = torch.arange(self._num_envs, device=self._device, dtype=torch.long)
+    num_patches = active_pairs.shape[0]
+    patch_indices = (env_indices + self._assignment_epoch) % num_patches
+
+    for patch_idx in range(num_patches):
+      assigned_envs = env_indices[patch_indices == patch_idx]
+      pair = active_pairs[patch_idx]
+      self._terrain_levels[assigned_envs] = pair[0]
+      self._terrain_types[assigned_envs] = pair[1]
+      self._offsets_xy[assigned_envs] = self._local_grid_offsets(
+        int(assigned_envs.numel()), half_extent_x, half_extent_y
+      )
+
+    self._assignment_ready = True
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | slice | None,
+    max_terrain_level: int | None = None,
+    patch_margin: float = 0.75,
+    local_grid_jitter: float = 0.0,
+    reshuffle_every_n_resets: int = 0,
+    shuffle_patch_order: bool = False,
+  ) -> None:
+    del max_terrain_level, patch_margin, local_grid_jitter, reshuffle_every_n_resets, shuffle_patch_order
+
+    terrain = env.scene.terrain
+    if terrain is None or terrain.terrain_origins is None or terrain.env_origins is None:
+      return
+
+    resolved_env_ids = self._resolve_env_ids(env_ids)
+    if resolved_env_ids.numel() == 0:
+      return
+
+    self._reset_call_count += 1
+    if (
+      self._reshuffle_every_n_resets > 0
+      and self._reset_call_count > 1
+      and (self._reset_call_count - 1) % self._reshuffle_every_n_resets == 0
+    ):
+      self._assignment_epoch = (self._assignment_epoch + 1) % max(self._num_envs, 1)
+      self._assignment_ready = False
+
+    if not self._assignment_ready:
+      self._recompute_assignments(env)
+
+    terrain.terrain_levels[resolved_env_ids] = self._terrain_levels[resolved_env_ids]
+    terrain.terrain_types[resolved_env_ids] = self._terrain_types[resolved_env_ids]
+    terrain.env_origins[resolved_env_ids] = terrain.terrain_origins[
+      self._terrain_levels[resolved_env_ids], self._terrain_types[resolved_env_ids]
+    ]
+    terrain.env_origins[resolved_env_ids, :2] += self._offsets_xy[resolved_env_ids]
 
 
 def reset_scene_to_default(

@@ -1,4 +1,4 @@
-"""RL configuration for Unitree G1 tracking task."""
+"""RL configuration for Unitree G1 tracking tasks."""
 
 from mjlab.rl import (
   RslRlModelCfg,
@@ -7,8 +7,15 @@ from mjlab.rl import (
 )
 
 
-def unitree_g1_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-  """Create RL runner configuration for Unitree G1 tracking task."""
+def _unitree_g1_tracking_ppo_runner_cfg(
+  experiment_name: str,
+) -> RslRlOnPolicyRunnerCfg:
+  """Create a shared PPO runner configuration for G1 tracking tasks.
+
+  Flat and rough tracking share the same optimizer/model structure so checkpoint
+  transfer stays straightforward. We only separate the experiment name to keep
+  logs and checkpoints easy to compare.
+  """
   return RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
       hidden_dims=(512, 256, 128),
@@ -39,8 +46,23 @@ def unitree_g1_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       desired_kl=0.01,
       max_grad_norm=1.0,
     ),
-    experiment_name="g1_tracking",
+    experiment_name=experiment_name,
     save_interval=500,
     num_steps_per_env=24,
     max_iterations=100_000,
   )
+
+
+def unitree_g1_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for the flat G1 tracking task."""
+  return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking")
+
+
+def unitree_g1_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for the rough G1 tracking task."""
+  return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_rough")
+
+
+def unitree_g1_jump_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for the jump-specific rough G1 tracking task."""
+  return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_jump_rough")

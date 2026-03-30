@@ -143,7 +143,23 @@ def run_play(task_id: str, cfg: PlayConfig):
     log_dir = resume_path.parent
 
   if cfg.num_envs is not None:
-    env_cfg.scene.num_envs = cfg.num_envs
+    requested_num_envs = cfg.num_envs
+    terrain_cfg = env_cfg.scene.terrain
+    if (
+      "stratified_terrain_placement" in env_cfg.events
+      and terrain_cfg is not None
+      and terrain_cfg.terrain_generator is not None
+    ):
+      max_visible_envs = (
+        terrain_cfg.terrain_generator.num_rows * terrain_cfg.terrain_generator.num_cols
+      )
+      if requested_num_envs > max_visible_envs:
+        print(
+          "[WARN]: Stratified terrain play visualization uses at most one env per visible patch. "
+          f"Clamping num_envs from {requested_num_envs} to {max_visible_envs}."
+        )
+        requested_num_envs = max_visible_envs
+    env_cfg.scene.num_envs = requested_num_envs
   if cfg.video_height is not None:
     env_cfg.viewer.height = cfg.video_height
   if cfg.video_width is not None:
