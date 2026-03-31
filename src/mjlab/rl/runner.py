@@ -60,6 +60,19 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     common_step_counter and to respect the ``upload_model`` config flag.
     """
     env_state = {"common_step_counter": self.env.unwrapped.common_step_counter}
+    #Modified by czy:增添rough课程阶段offset保存逻辑，便于play根据checkpoint还原正确课程阶段
+    try:
+      staged_sampling_cfg = self.env.unwrapped.event_manager.get_term_cfg(
+        "staged_terrain_sampling"
+      )
+    except ValueError:
+      staged_sampling_cfg = None
+    if (
+      staged_sampling_cfg is not None
+      and hasattr(staged_sampling_cfg.func, "get_state")
+      and callable(staged_sampling_cfg.func.get_state)
+    ):
+      env_state["staged_terrain_sampling_state"] = staged_sampling_cfg.func.get_state()
     infos = {**(infos or {}), "env_state": env_state}
     # Inline base OnPolicyRunner.save() to conditionally gate W&B upload.
     saved_dict = self.alg.save()
@@ -127,4 +140,18 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     infos = loaded_dict["infos"]
     if infos and "env_state" in infos:
       self.env.unwrapped.common_step_counter = infos["env_state"]["common_step_counter"]
+      #Modified by czy:增添rough课程阶段offset恢复逻辑，确保play与续训都对齐到checkpoint阶段
+      staged_sampling_state = infos["env_state"].get("staged_terrain_sampling_state")
+      try:
+        staged_sampling_cfg = self.env.unwrapped.event_manager.get_term_cfg(
+          "staged_terrain_sampling"
+        )
+      except ValueError:
+        staged_sampling_cfg = None
+      if (
+        staged_sampling_cfg is not None
+        and hasattr(staged_sampling_cfg.func, "set_state")
+        and callable(staged_sampling_cfg.func.set_state)
+      ):
+        staged_sampling_cfg.func.set_state(staged_sampling_state)
     return infos

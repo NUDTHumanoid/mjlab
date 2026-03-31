@@ -58,6 +58,17 @@ class staged_tracking_terrain_sampling:
     del cfg
     self._captured_stage_step_offset: int | None = None
 
+  #Modified by czy:增添rough阶段采样器状态导出接口，用于checkpoint保存与play恢复
+  def get_state(self) -> dict[str, int | None]:
+    return {"captured_stage_step_offset": self._captured_stage_step_offset}
+
+  #Modified by czy:增添rough阶段采样器状态恢复接口，用于checkpoint加载后同步课程阶段
+  def set_state(self, state: dict[str, int | None] | None) -> None:
+    if state is None:
+      self._captured_stage_step_offset = None
+      return
+    self._captured_stage_step_offset = state.get("captured_stage_step_offset")
+
   def __call__(
     self,
     env: ManagerBasedRlEnv,

@@ -206,6 +206,41 @@ def _apply_randomized_terrain_play_overrides(
       terrain_generator.border_width = border_width
 
 
+def _apply_staged_terrain_play_overrides(
+  cfg: ManagerBasedRlEnvCfg,
+  motion_cmd: MotionCommandCfg,
+  *,
+  num_rows: int,
+  num_cols: int,
+  border_width: float = 10.0,
+) -> None:
+  """Use the same staged terrain sampler during play as during training.
+
+  This keeps terrain visualization aligned with the curriculum stage restored
+  from the loaded checkpoint while still using deterministic play-time motion
+  settings for qualitative inspection.
+  """
+  _apply_tracking_play_overrides(cfg, motion_cmd)
+  #Modified by czy:增添play阶段地形同步展示逻辑，使play按checkpoint恢复的课程阶段展示rough地形
+  cfg.events["staged_terrain_sampling"] = EventTermCfg(
+    func=mdp.staged_tracking_terrain_sampling,
+    mode="reset",
+    params={
+      "stages": _TRACKING_ROUGH_TERRAIN_STAGES,
+      "rough_stage_step_offset": _TRACKING_ROUGH_STAGE_STEP_OFFSET,
+      "auto_capture_offset": True,
+    },
+  )
+
+  if cfg.scene.terrain is not None:
+    terrain_generator = cfg.scene.terrain.terrain_generator
+    if terrain_generator is not None:
+      terrain_generator.curriculum = True
+      terrain_generator.num_rows = num_rows
+      terrain_generator.num_cols = num_cols
+      terrain_generator.border_width = border_width
+
+
 # JumpRough-specific stratified play helper disabled for now.
 # def _apply_stratified_terrain_play_overrides(
 #   cfg: ManagerBasedRlEnvCfg,
@@ -406,11 +441,12 @@ def unitree_g1_rough_tracking_env_cfg(
   cfg.terminations["anchor_ori"].params["threshold"] = 1.2  # modified:rough-stage2 0.8→1.2
 
   if play:
-    _apply_randomized_terrain_play_overrides(
+    #Modified by czy:修改play地形展示逻辑，使其与rough课程阶段同步，而不是独立随机采样地形
+    _apply_staged_terrain_play_overrides(
       cfg,
       motion_cmd,
-      num_rows=5,
-      num_cols=5,
+      num_rows=6,
+      num_cols=6,
       border_width=10.0,
     )
 
