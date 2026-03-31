@@ -63,6 +63,7 @@ def unitree_g1_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_rough")
 
 
-def unitree_g1_jump_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-  """Create RL runner configuration for the jump-specific rough G1 tracking task."""
-  return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_jump_rough")
+# JumpRough runner config disabled for now; keep the general rough-terrain task only.
+# def unitree_g1_jump_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+#   """Create RL runner configuration for the jump-specific rough G1 tracking task."""
+#   return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_jump_rough")
