@@ -1,4 +1,0 @@
-interface:
-  display_name: "Continual Learning"
-  short_description: "Incrementally maintain AGENTS.md memory"
-  default_prompt: "Use $continual-learning to extract durable preferences and workspace facts from new Codex session logs and update AGENTS.md incrementally."
