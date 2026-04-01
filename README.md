@@ -253,31 +253,57 @@ Compared with the flat tracking task, it changes four major pieces:
 
 1. Terrain
    - The scene switches from a flat plane to a generated terrain grid.
-   - The terrain mix is deliberately mild rather than locomotion-hard:
-     - `flat`: `0.35`
-     - `pyramid_stairs`: `0.15` with `step_height_range=(0.0, 0.05)`
-     - `pyramid_stairs_inv`: `0.15` with `step_height_range=(0.0, 0.05)`
-     - `hf_pyramid_slope`: `0.10` with `slope_range=(0.0, 0.3)`
-     - `hf_pyramid_slope_inv`: `0.10` with `slope_range=(0.0, 0.3)`
-     - `random_rough`: `0.10` with `noise_range=(0.01, 0.04)`
-     - `wave_terrain`: `0.05` with `amplitude_range=(0.0, 0.08)`
-   - The initial terrain curriculum is capped to the easier rows with `max_init_terrain_level=2`.
+   - The rough task now keeps only three terrain families:
+     - `flat`
+     - `random_rough` with `noise_range=(0.01, 0.04)`
+     - `wave_terrain` with `amplitude_range=(0.0, 0.08)`
+   - Stairs and slope terrains are intentionally removed so rough fine-tuning stays closer to the flat reference motion and focuses on mild uneven-ground adaptation.
+   - The generator keeps a `6 x 12` curriculum grid. Its base column allocation is biased toward waves so later stages have more smooth-undulating terrain coverage:
+     - `flat`: `0.25`
+     - `random_rough`: `0.25`
+     - `wave_terrain`: `0.50`
+   - Training starts from the easiest terrain row with `max_init_terrain_level=0`.
 
-2. Reward shaping
+2. Stage curriculum
+   - Rough terrain progression is staged relative to the start of the rough fine-tuning phase, not the total lifetime of the policy.
+   - The current implementation uses four stages:
+
+| Rough phase progress | `max_terrain_level` | `flat` | `random_rough` | `wave_terrain` |
+| --- | --- | --- | --- | --- |
+| `>= 0` iterations | `0` | `0.70` | `0.20` | `0.10` |
+| `>= 3,000` iterations | `2` | `0.50` | `0.20` | `0.30` |
+| `>= 6,000` iterations | `4` | `0.30` | `0.25` | `0.45` |
+| `>= 9,000` iterations | `5` | `0.15` | `0.25` | `0.60` |
+
+   - The stage switch points are defined in `src/mjlab/tasks/tracking/config/g1/env_cfgs.py` as `step = iterations * 24`, because tracking PPO uses `num_steps_per_env = 24`.
+   - `wave_terrain` is intentionally weighted higher than `random_rough` in later stages so the final rough policy sees more continuous undulating terrain than fully irregular bumps.
+
+3. Reward shaping
    - `motion_global_root_pos` becomes XY-only root tracking instead of full XYZ tracking.
    - `motion_global_root_z_vel` is added to preserve jump timing through vertical root velocity.
    - `motion_global_root_z_pos` is added as a soft height term so the policy still aims for the reference apex.
    - `motion_global_root_ori.weight` changes from `0.5 -> 1.0`.
    - `motion_body_ori.weight` changes from `1.0 -> 1.5`.
 
-3. Domain randomization and contacts
+4. Domain randomization and contacts
    - `push_robot` is removed.
    - `base_com`, `encoder_bias`, and `foot_friction` randomization ranges are narrowed.
    - Contact limits are increased with `nconmax=60`, `contact_sensor_maxmatch=128`, and `ccd_iterations=200` to better handle uneven landings.
 
-4. Terminations
+5. Terminations
    - Flat-ground-specific z-only terminations (`anchor_pos`, `ee_body_pos`) are removed.
    - `anchor_ori.threshold` is relaxed from `0.8 -> 1.2` so the policy can survive the landing transition on uneven terrain.
+
+#### How rough-stage offsets work
+
+When you start rough training from a flat checkpoint, the code automatically captures the current total training step counter and treats that point as the beginning of the rough phase. This means a flat checkpoint such as `model_7000.pt` still starts rough curriculum at rough-stage `0`, not at the `7000`-iteration stage.
+
+New rough checkpoints also save this rough-phase offset into the checkpoint metadata. As a result:
+
+- resuming rough training continues from the correct rough curriculum stage
+- `play` can restore the same rough stage and visualize the matching terrain mix
+
+Older rough checkpoints created before this metadata was added do not contain the saved offset, so stage-aware `play` cannot perfectly recover their rough progress.
 
 A typical local rough-training command looks like this:
 
@@ -287,6 +313,18 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1 \
   --env.scene.num-envs 4096 \
   --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-03-12_16-26-30/model_7000.pt
 ```
+
+Play a rough checkpoint against the same local motion file:
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1 \
+  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking_rough/2026-03-12_16-26-30/model_1000.pt \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/jump_forward02_poses.npz \
+  --num-envs 16 \
+  --viewer viser
+```
+
+For rough `play`, the terrain sampler is stage-aware: if the loaded checkpoint corresponds to the second rough stage, the viewer will sample second-stage terrain proportions and difficulty bounds instead of always showing stage `0`.
 
 
 ## Documentation

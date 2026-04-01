@@ -61,7 +61,7 @@ _TRACKING_ROUGH_STAGE_STEP_OFFSET = (
   else _TRACKING_ROUGH_STAGE_ITERATION_OFFSET * 24
 )
 
-#Modified by czy:修改rough四阶段地形课程配置，阶段切换改为相对rough开始训练后的0/5k/15k/30k轮
+#Modified by czy:修改rough四阶段地形课程配置，阶段切换改为相对rough开始训练后的0/3k/6k/9k轮
 _TRACKING_ROUGH_TERRAIN_STAGES = [
   {
     "step": 0,
