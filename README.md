@@ -79,6 +79,64 @@ uv run play Mjlab-Tracking-Flat-Unitree-G1 \
   --motion-file /path/to/motion.npz
 ```
 
+Replay a motion `.npz` directly in MuJoCo without loading a policy:
+
+```bash
+uv run replay-motion Mjlab-Tracking-Flat-Unitree-G1 \
+  --motion-file /path/to/motion.npz
+```
+
+This replays each motion frame by writing the root and joint state directly back
+into the simulator. By default it uses the MuJoCo native viewer, where `Space`
+pauses, `Right Arrow` single-steps, `Enter` resets to frame `0`, and `D` dumps
+the current frame's root/joint data to the terminal. The native viewer overlay
+also shows the current frame's `min_foot_bottom_z`, computed from the matched
+foot collision geoms.
+
+#### Replay Motion Viewer
+
+Activate the project environment first, then run `uv run replay-motion`:
+
+```bash
+source /home/nubot/workspace/mjlab/.venv/bin/activate
+
+uv run replay-motion Mjlab-Tracking-Flat-Unitree-G1 \
+  --motion-file /path/to/motion.npz \
+  --start-paused
+```
+
+Example for a local G1 motion:
+
+```bash
+source /home/nubot/workspace/mjlab/.venv/bin/activate
+
+uv run replay-motion Mjlab-Tracking-Flat-Unitree-G1 \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/example_motion.npz \
+  --start-paused \
+  --reference-viz ghost
+```
+
+Main parameters:
+
+- `task_id`: the tracking task to build, for example `Mjlab-Tracking-Flat-Unitree-G1`.
+- `--motion-file`: required path to the replayed motion `.npz`.
+- `--viewer {native,viser,auto}`: choose the viewer backend. Default is `native`.
+- `--num-envs`: number of environments to instantiate. Default is `1`.
+- `--start-paused` / `--no-start-paused`: start the replay paused or running.
+- `--loop` / `--no-loop`: loop the motion or stop at the last frame.
+- `--reference-viz {none,ghost,frames}`: optionally show the tracking reference visualization.
+- `--root-body-name`: override which motion body is treated as the replay root.
+- `--foot-geom-pattern`: regex used to find the foot collision geoms for `min_foot_bottom_z` display.
+- `--print-summary` / `--no-print-summary`: print motion metadata to the terminal at startup.
+- `--verbosity {silent,info,debug}`: viewer logging verbosity.
+
+Useful native viewer hotkeys:
+
+- `Space`: pause / resume replay.
+- `Right Arrow`: single-step one replay frame while paused.
+- `Enter`: reset to frame `0`.
+- `D`: dump the current frame's root pose, root velocity, joint values, and `min_foot_bottom_z` to the terminal.
+
 ### 3. Sanity-check with Dummy Agents
 
 Use built-in agents to sanity check your MDP before training:
@@ -161,6 +219,20 @@ About `--ground-align` and `--clearance`:
 - `--ground-align none`: use the raw root heights from the CSV.
 - `--ground-align global`: analyze the whole motion and apply one global upward offset if needed.
 - `--clearance 0.01`: set the target minimum foot-bottom clearance to `0.01 m` (1 cm).
+
+Ground-alignment workflow notes:
+
+- `analyze_foot_penetration.py` is diagnostic only. It reports the current worst-case foot-bottom height and the recommended global lift, but it does not modify any files.
+- `csv_to_npz.py --ground-align global` is the step that actually changes the output motion. It writes a new `.npz` whose root `z` trajectory has been shifted upward by one constant offset.
+- `replay-motion`, `play`, and training do not run ground alignment again. They simply consume the `.npz` motion file you produced. In practice, this means the training-time reference motion is the aligned `.npz` if you converted with `--ground-align global`, and the raw motion otherwise.
+- The optional `.mp4` preview from `csv_to_npz.py --render True` is rendered from the same aligned motion data, so the robot-ground relationship should match `replay-motion` for the same `.npz`. Small visual differences can still appear because the preview video and `replay-motion` use different default cameras.
+- `--clearance` only constrains the minimum height of the matched foot collision geoms. It does not guarantee that other body parts such as the head, hands, or torso will stay above the ground plane during flips, rolls, or hard landings.
+
+Practical interpretation:
+
+- Use `--ground-align global` when you want the exported `.npz` to have a controlled foot-ground offset before replay or training.
+- Use `--ground-align none` when you intentionally want to keep the raw source heights.
+- If the feet look correct but the head still clips the floor during a landing, that is expected under the current implementation: the alignment target is foot clearance, not full-body clearance.
 
 You do not need to run `analyze_foot_penetration.py` before `csv_to_npz.py`. The standalone
 analysis script is optional and is mainly useful when you want to inspect the worst frames or tune
