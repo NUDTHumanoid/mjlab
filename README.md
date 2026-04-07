@@ -218,12 +218,15 @@ About `--ground-align` and `--clearance`:
 
 - `--ground-align none`: use the raw root heights from the CSV.
 - `--ground-align global`: analyze the whole motion and apply one global upward offset if needed.
+- `--ground-align phased`: use foot height to distinguish near-ground vs airborne phases, keep grounded frames close to the foot-based lift, and allow larger temporary lift during airborne windows to protect whole-body collisions near landing.
 - `--clearance 0.01`: set the target minimum foot-bottom clearance to `0.01 m` (1 cm).
 
 Ground-alignment workflow notes:
 
 - `analyze_foot_penetration.py` is diagnostic only. It reports the current worst-case foot-bottom height and the recommended global lift, but it does not modify any files.
+- `analyze_foot_penetration.py` can also auto-suggest a coarse phased schedule. By default it first infers grounded-vs-airborne control points from the motion's own nearby foot-height distribution, then roughly segments the motion into grounded / takeoff / airborne / landing windows and prints a reference lift range for each segment, but it still does not modify any files.
 - `csv_to_npz.py --ground-align global` is the step that actually changes the output motion. It writes a new `.npz` whose root `z` trajectory has been shifted upward by one constant offset.
+- `csv_to_npz.py --ground-align phased` also changes the output motion, but with a frame-varying root `z` offset. It uses foot height as the phase cue: grounded windows stay closer to the foot-based lift, while airborne windows can rise more to keep head/torso/hand collisions from dipping below the plane near landing.
 - `replay-motion`, `play`, and training do not run ground alignment again. They simply consume the `.npz` motion file you produced. In practice, this means the training-time reference motion is the aligned `.npz` if you converted with `--ground-align global`, and the raw motion otherwise.
 - The optional `.mp4` preview from `csv_to_npz.py --render True` is rendered from the same aligned motion data, so the robot-ground relationship should match `replay-motion` for the same `.npz`. Small visual differences can still appear because the preview video and `replay-motion` use different default cameras.
 - `--clearance` only constrains the minimum height of the matched foot collision geoms. It does not guarantee that other body parts such as the head, hands, or torso will stay above the ground plane during flips, rolls, or hard landings.
@@ -231,8 +234,9 @@ Ground-alignment workflow notes:
 Practical interpretation:
 
 - Use `--ground-align global` when you want the exported `.npz` to have a controlled foot-ground offset before replay or training.
+- Use `--ground-align phased` when a single global lift is too conservative, especially for flips or rolls where the feet are clear of the floor during flight but the head or torso threatens to clip the ground near landing.
 - Use `--ground-align none` when you intentionally want to keep the raw source heights.
-- If the feet look correct but the head still clips the floor during a landing, that is expected under the current implementation: the alignment target is foot clearance, not full-body clearance.
+- If the feet look correct but the head still clips the floor during a landing, switch from `global` to `phased`: `global` only enforces foot clearance, while `phased` also uses whole-body collision minima during airborne windows.
 
 You do not need to run `analyze_foot_penetration.py` before `csv_to_npz.py`. The standalone
 analysis script is optional and is mainly useful when you want to inspect the worst frames or tune
@@ -248,6 +252,90 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
   --clearance 0.01
 ```
 
+This diagnostic command does two things:
+
+- It reports the worst foot and whole-body collision frames, so you can see which geom is actually requesting the lift.
+- It also auto-suggests coarse phases and a reference lift range for each phase, using the same logic as `--ground-align phased`.
+
+Automatic vs manual phase control:
+
+- By default, the analysis step is automatic. You do not need to hand-split the motion.
+- The analysis script first estimates a grounded foot-height band and an airborne foot-height band from the motion itself, so the suggested phases are not tied to one specific flip or roll clip.
+- Near-ground windows stay close to foot-based lift; clearly airborne windows are allowed to follow whole-body-driven lift more strongly.
+- Manual editing is only needed if you want to override that default behavior with your own `--phase-blend-points`, or if you already know the exact control points you want to test.
+- The analysis script can be used as a first pass for future aerial motions: let it auto-segment the motion, inspect the suggested phases and lift ranges, then decide whether the default automatic schedule is already good enough.
+
+If you want the analysis script to auto-infer the grounded / airborne split and print a reference `suggested_phase_blend_points`, you can keep the command minimal and omit all phased tuning overrides:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --input-fps 120 \
+  --output-fps 50 \
+  --clearance 0.01
+```
+
+In this default form, the script will infer the phase split from the motion itself. It will automatically print:
+
+- `suggested_phase_grounded_height`
+- `suggested_phase_airborne_height`
+- `suggested_phase_blend_points`
+- `csv_to_npz_hint`
+- `Suggested coarse phases`, including each phase's `lift(min/mean/max)` range
+
+So the command itself is not manually splitting the motion into stages. The stage suggestion and the recommended phase offsets come from the analysis output.
+
+How to use the analysis output:
+
+- `recommended_global_z_offset_m` under `Foot grounding summary`: this is the constant upward shift you would need if you used `--ground-align global`. If the foot value is already acceptable and the whole body is also safe, `global` may be enough.
+- `recommended_global_z_offset_m` under `Whole-body collision grounding summary`: this is the constant upward shift needed to make the worst whole-body collision safe. If this value is much larger than the foot-based value, a single global lift will usually make the whole motion look too high, so `phased` is usually the better next step.
+- `suggested_phase_grounded_height` and `suggested_phase_airborne_height`: these are auto-inferred reference heights for the phase cue. They tell you where the script believes the motion is still near-ground and where it is clearly airborne.
+- `suggested_phase_blend_points`: this is the most practical field for the next step. Copy it into `csv_to_npz.py` as `--phase-blend-points`.
+- `csv_to_npz_hint`: this is the same idea in ready-to-paste CLI form.
+- `Suggested coarse phases`: this is the script's rough segmentation of the motion. Use it to sanity-check whether the inferred grounded / takeoff / airborne / landing windows match your intuition.
+- `lift(min/mean/max)` inside each suggested phase: this is the recommended frame-wise root `z` lift range for that phase. A large `max` during `airborne` means the landing needs protection from head / torso / hand penetration. Near-zero lift in the final `grounded` phase means the motion can return to a normal stance height after landing.
+
+Recommended next step after running the analysis:
+
+1. Start from the printed `csv_to_npz_hint`, keep the same `--clearance`, and convert the CSV into a new `.npz`.
+2. Replay that `.npz` with `replay-motion` and inspect the landing.
+3. If the landing still dips too low, increase `--phase-lookahead-s` a little, or make the blend enter airborne mode earlier by lowering the first height in `--phase-blend-points`.
+4. If the robot starts floating too early during takeoff or after landing, decrease `--phase-lookahead-s`, or make airborne mode harder to enter by raising the heights in `--phase-blend-points`.
+5. Once the replay looks reasonable, use that converted `.npz` for training.
+
+For the exact output shown above, the first conversion command to try would be:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto.npz \
+  --input-fps 120 \
+  --output-fps 50 \
+  --ground-align phased \
+  --clearance 0.01 \
+  --phase-blend-points "0.049:0.00,0.593:1.00" \
+  --render True
+```
+
+That command uses the auto-inferred phase control points from the analysis output. You can treat it as the first candidate `.npz`, not necessarily the final one.
+
+If you already know the exact phased settings you want to test, you can still override the auto-inferred behavior manually:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --input-fps 120 \
+  --output-fps 50 \
+  --clearance 0.01 \
+  --phase-grounded-height 0.03 \
+  --phase-airborne-height 0.10 \
+  --phase-window-s 0.12 \
+  --phase-lookahead-s 0.24 \
+  --phase-smoothing-s 0.08
+```
+
+These extra analysis parameters still do not change any files. They only change how the diagnostic script groups the motion into coarse phases and how it computes the suggested frame-wise lift range. Treat them as optional advanced tuning knobs, not as required stage definitions.
+
 Convert the mimic CSV file into a local `.npz` motion file:
 
 ```bash
@@ -262,6 +350,67 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
 ```
 
 This produces a local `.npz` motion file and, when `--render True` is set, a local `.mp4` preview video as well. If you do not need automatic ground alignment, you can omit `--ground-align global --clearance 0.01`.
+
+For aerial motions such as flips and shoulder rolls, `phased` alignment can be a better starting point than one global lift:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased.npz \
+  --input-fps 120 \
+  --output-fps 50 \
+  --ground-align phased \
+  --clearance 0.01 \
+  --phase-grounded-height 0.03 \
+  --phase-airborne-height 0.10 \
+  --phase-window-s 0.12 \
+  --phase-lookahead-s 0.24 \
+  --phase-smoothing-s 0.08 \
+  --render True
+```
+
+The phased mode still keeps the final training motion self-consistent: after the frame-wise root `z` offsets are applied, the converter recomputes the root linear velocity before exporting the `.npz`.
+
+Detailed phased-parameter guide:
+
+- `--clearance`: target minimum foot-bottom clearance after alignment. Start with `0.01`. Increase it if the feet still scrape the plane; decrease it if the whole motion looks unnecessarily lifted near takeoff or stance.
+- `--whole-body-geom-pattern`: regex for the collision geoms that are allowed to request extra airborne lift. The default `.*_collision$` includes head, torso, hands, feet, and other collision bodies. Narrow it if you only want a subset of bodies to matter.
+- `--phase-grounded-height`: lower default control point for foot height. When the local foot-bottom height is at or below this value, phased alignment behaves like foot-based alignment and avoids large extra lift. Raise it if you want the airborne logic to activate earlier; lower it if you want more frames to stay close to the original grounded height.
+- `--phase-airborne-height`: upper default control point for foot height. When the local foot-bottom height is at or above this value, phased alignment allows full whole-body-driven lift. Lower it if flips should enter airborne protection sooner; raise it if only clearly airborne windows should get the larger lift.
+- `--phase-window-s`: symmetric foot-height context window used to classify whether a frame belongs to a grounded or airborne neighborhood. Larger values make phase decisions steadier but less responsive; smaller values make them react faster but can create jitter around takeoff and landing.
+- `--phase-lookahead-s`: how far ahead phased alignment looks when preparing for an upcoming landing. Larger values start lifting earlier in flight; smaller values delay the lift and keep the takeoff closer to the original reference.
+- `--phase-smoothing-s`: temporal smoothing applied to the frame-wise offsets. Larger values create softer transitions but can spread lift farther across the motion; smaller values make the alignment more local and more literal.
+
+Recommended phased-tuning workflow:
+
+- Step 1: run `analyze_foot_penetration.py` and note the worst foot frame, the worst whole-body frame, and the suggested coarse phases with their recommended lift ranges.
+- Step 2: start from `--ground-align phased --clearance 0.01` with the default phased parameters.
+- Step 3: if landing bodies still dip below the plane, first increase `--phase-lookahead-s`, then decrease `--phase-airborne-height`.
+- Step 4: if the whole jump or roll starts to look too high too early, decrease `--phase-lookahead-s` or increase `--phase-airborne-height`.
+- Step 5: if transitions look abrupt, increase `--phase-smoothing-s` a little. If too much of the motion is being lifted, decrease it.
+- Step 6: if near-ground frames are still getting too much airborne-style lift, lower `--phase-grounded-height`.
+
+Custom stages and how to change them:
+
+- The default phased behavior is effectively a 2-stage schedule:
+  foot near the ground -> mostly foot-based lift
+  foot clearly airborne -> allow whole-body-driven lift
+- You are not locked to those two stages. Use `--phase-blend-points` to provide your own control points in `foot_height:blend_weight` format, separated by commas. Example:
+
+```bash
+--phase-blend-points "0.00:0.0,0.03:0.0,0.06:0.35,0.10:1.0"
+```
+
+- In that example, the staged meaning is:
+  `0.00` to `0.03` m: stay fully foot-based
+  around `0.06` m: begin mixing in extra airborne lift
+  at `0.10` m and above: allow full whole-body-driven lift
+- More control points mean more stages. You can use 1 point, 2 points, or many points:
+  1 point means a constant blend weight everywhere
+  2 points behaves like the default grounded/airborne ramp
+  3 or more points gives you custom multi-stage behavior
+- No, all stages do not have to exist. If `--phase-blend-points` is omitted, the converter falls back to the default 2-point schedule controlled by `--phase-grounded-height` and `--phase-airborne-height`.
+- If `--phase-blend-points` is provided, it overrides `--phase-grounded-height` and `--phase-airborne-height`.
 
 `csv_to_npz.py` also supports batch conversion, similar to `sonic2mimic.py`. In
 batch mode it recursively scans `--inputm` for `.csv` files and writes matching

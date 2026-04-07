@@ -55,6 +55,7 @@ G1_TRACKING_JOINT_NAMES = [
   "right_wrist_yaw_joint",
 ]
 G1_FOOT_GEOM_PATTERN = r"^(left|right)_foot[1-7]_collision$"
+ALL_COLLISION_GEOM_PATTERN = r".*_collision$"
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,54 @@ class GroundingStats:
   frame_min_foot_z: np.ndarray
   global_min_foot_z: float
   recommended_delta_z: float
+
+
+@dataclass(frozen=True)
+class CollisionGroundingStats:
+  geom_names: tuple[str, ...]
+  frame_min_bottom_z: np.ndarray
+  frame_min_geom_indices: np.ndarray
+  global_min_bottom_z: float
+  recommended_delta_z: float
+
+  @property
+  def global_min_geom_name(self) -> str:
+    global_idx = int(np.argmin(self.frame_min_bottom_z))
+    culprit_idx = int(self.frame_min_geom_indices[global_idx])
+    return self.geom_names[culprit_idx]
+
+
+@dataclass(frozen=True)
+class PhaseBlendControlSuggestion:
+  control_points: np.ndarray
+  source: str
+  note: str
+  nearby_foot_height: np.ndarray
+  grounded_center: float
+  airborne_center: float
+  airborne_segments: int
+  airborne_frame_ratio: float
+
+  @property
+  def grounded_height(self) -> float | None:
+    zero_weight = self.control_points[self.control_points[:, 1] <= 0.0]
+    if zero_weight.size == 0:
+      return None
+    return float(zero_weight[-1, 0])
+
+  @property
+  def airborne_height(self) -> float | None:
+    one_weight = self.control_points[self.control_points[:, 1] >= 1.0]
+    if one_weight.size == 0:
+      return None
+    return float(one_weight[0, 0])
+
+  @property
+  def blend_points_cli(self) -> str:
+    return ",".join(
+      f"{float(height):.3f}:{float(weight):.2f}"
+      for height, weight in self.control_points
+    )
 
 
 def collect_csv_files(input_dir: Path) -> list[Path]:
@@ -220,6 +269,25 @@ class MotionLoader:
       [omega[:1], omega, omega[-1:]], dim=0
     )  # repeat first and last sample
     return omega
+
+  def apply_root_z_offset(
+    self, offset_z: float | np.ndarray | torch.Tensor
+  ) -> None:
+    offset_tensor = torch.as_tensor(
+      offset_z, dtype=self.motion_base_poss.dtype, device=self.device
+    )
+    if offset_tensor.ndim == 0 or offset_tensor.numel() == 1:
+      scalar = offset_tensor.reshape(()).clone()
+      self.motion_base_poss_input[:, 2] += scalar
+      self.motion_base_poss[:, 2] += scalar
+    else:
+      if offset_tensor.shape != (self.output_frames,):
+        raise ValueError(
+          "Frame-wise root z offsets must match the interpolated output frame count. "
+          f"Expected {(self.output_frames,)}, got {tuple(offset_tensor.shape)}."
+        )
+      self.motion_base_poss[:, 2] += offset_tensor
+    self._compute_velocities()
 
   def get_next_state(
     self,
@@ -379,6 +447,65 @@ def _compute_geom_bottom_heights(
   return bottom_heights
 
 
+def analyze_collision_grounding(
+  sim: Simulation,
+  scene: Scene,
+  robot: Entity,
+  robot_joint_indexes: list[int],
+  motion: MotionLoader,
+  clearance: float,
+  geom_pattern: str,
+  show_progress: bool = True,
+) -> CollisionGroundingStats:
+  geom_ids, geom_names = robot.find_geoms(geom_pattern, preserve_order=True)
+  if not geom_ids:
+    raise ValueError(f"No geoms matched pattern: {geom_pattern}")
+
+  global_geom_ids = robot.indexing.geom_ids[geom_ids].cpu().numpy()
+  geom_sizes = torch.tensor(
+    sim.mj_model.geom_size[global_geom_ids],
+    dtype=torch.float32,
+    device=sim.device,
+  )
+  geom_types = np.asarray(sim.mj_model.geom_type[global_geom_ids])
+
+  frame_min_bottom_z = np.empty(motion.output_frames, dtype=np.float32)
+  frame_min_geom_indices = np.empty(motion.output_frames, dtype=np.int32)
+  frame_iterator = range(motion.output_frames)
+  if show_progress:
+    frame_iterator = tqdm(
+      frame_iterator,
+      total=motion.output_frames,
+      desc="Analyzing collision grounding",
+      unit="frame",
+      ncols=100,
+    )
+
+  scene.reset()
+  for frame_idx in frame_iterator:
+    _write_motion_frame_to_sim(sim, scene, robot, robot_joint_indexes, motion, frame_idx)
+    geom_pose_w = robot.data.geom_pose_w[0, geom_ids]
+    bottom_heights = _compute_geom_bottom_heights(
+      geom_pos_w=geom_pose_w[:, :3],
+      geom_quat_w=geom_pose_w[:, 3:7],
+      geom_sizes=geom_sizes,
+      geom_types=geom_types,
+    )
+    culprit_idx = int(bottom_heights.argmin().item())
+    frame_min_geom_indices[frame_idx] = culprit_idx
+    frame_min_bottom_z[frame_idx] = float(bottom_heights[culprit_idx].item())
+
+  global_min_bottom_z = float(frame_min_bottom_z.min())
+  recommended_delta_z = max(0.0, clearance - global_min_bottom_z)
+  return CollisionGroundingStats(
+    geom_names=tuple(geom_names),
+    frame_min_bottom_z=frame_min_bottom_z,
+    frame_min_geom_indices=frame_min_geom_indices,
+    global_min_bottom_z=global_min_bottom_z,
+    recommended_delta_z=recommended_delta_z,
+  )
+
+
 def analyze_foot_penetration(
   sim: Simulation,
   scene: Scene,
@@ -389,58 +516,329 @@ def analyze_foot_penetration(
   foot_geom_pattern: str = G1_FOOT_GEOM_PATTERN,
   show_progress: bool = True,
 ) -> GroundingStats:
-  foot_geom_ids, foot_geom_names = robot.find_geoms(
-    foot_geom_pattern, preserve_order=True
+  collision_stats = analyze_collision_grounding(
+    sim=sim,
+    scene=scene,
+    robot=robot,
+    robot_joint_indexes=robot_joint_indexes,
+    motion=motion,
+    clearance=clearance,
+    geom_pattern=foot_geom_pattern,
+    show_progress=show_progress,
   )
-  if not foot_geom_ids:
-    raise ValueError(f"No foot geoms matched pattern: {foot_geom_pattern}")
-
-  global_geom_ids = robot.indexing.geom_ids[foot_geom_ids].cpu().numpy()
-  geom_sizes = torch.tensor(
-    sim.mj_model.geom_size[global_geom_ids],
-    dtype=torch.float32,
-    device=sim.device,
-  )
-  geom_types = np.asarray(sim.mj_model.geom_type[global_geom_ids])
-
-  frame_min_foot_z = np.empty(motion.output_frames, dtype=np.float32)
-  frame_iterator = range(motion.output_frames)
-  if show_progress:
-    frame_iterator = tqdm(
-      frame_iterator,
-      total=motion.output_frames,
-      desc="Analyzing foot grounding",
-      unit="frame",
-      ncols=100,
-    )
-
-  scene.reset()
-  for frame_idx in frame_iterator:
-    _write_motion_frame_to_sim(sim, scene, robot, robot_joint_indexes, motion, frame_idx)
-    geom_pose_w = robot.data.geom_pose_w[0, foot_geom_ids]
-    bottom_heights = _compute_geom_bottom_heights(
-      geom_pos_w=geom_pose_w[:, :3],
-      geom_quat_w=geom_pose_w[:, 3:7],
-      geom_sizes=geom_sizes,
-      geom_types=geom_types,
-    )
-    frame_min_foot_z[frame_idx] = float(bottom_heights.min().item())
-
-  global_min_foot_z = float(frame_min_foot_z.min())
-  recommended_delta_z = max(0.0, clearance - global_min_foot_z)
   return GroundingStats(
-    foot_geom_names=tuple(foot_geom_names),
-    frame_min_foot_z=frame_min_foot_z,
-    global_min_foot_z=global_min_foot_z,
-    recommended_delta_z=recommended_delta_z,
+    foot_geom_names=collision_stats.geom_names,
+    frame_min_foot_z=collision_stats.frame_min_bottom_z,
+    global_min_foot_z=collision_stats.global_min_bottom_z,
+    recommended_delta_z=collision_stats.recommended_delta_z,
   )
 
 
 def apply_global_ground_alignment(motion: MotionLoader, stats: GroundingStats) -> None:
   if stats.recommended_delta_z <= 0.0:
     return
-  motion.motion_base_poss_input[:, 2] += stats.recommended_delta_z
-  motion.motion_base_poss[:, 2] += stats.recommended_delta_z
+  motion.apply_root_z_offset(stats.recommended_delta_z)
+
+
+def _symmetric_window_max(values: np.ndarray, radius: int) -> np.ndarray:
+  if radius <= 0:
+    return values.copy()
+  out = np.empty_like(values, dtype=np.float64)
+  for idx in range(values.shape[0]):
+    lo = max(0, idx - radius)
+    hi = min(values.shape[0], idx + radius + 1)
+    out[idx] = values[lo:hi].max()
+  return out
+
+
+def _forward_window_max(values: np.ndarray, window: int) -> np.ndarray:
+  out = np.empty_like(values, dtype=np.float64)
+  for idx in range(values.shape[0]):
+    hi = min(values.shape[0], idx + window)
+    out[idx] = values[idx:hi].max()
+  return out
+
+
+def _edge_smoothed(values: np.ndarray, radius: int) -> np.ndarray:
+  if radius <= 0:
+    return values.copy()
+  kernel = np.ones(2 * radius + 1, dtype=np.float64)
+  kernel = kernel / kernel.sum()
+  padded = np.pad(values, (radius, radius), mode="edge")
+  return np.convolve(padded, kernel, mode="valid")
+
+
+def _boolean_segments(values: np.ndarray) -> list[tuple[bool, int, int]]:
+  if values.size == 0:
+    return []
+  segments: list[tuple[bool, int, int]] = []
+  start = 0
+  current = bool(values[0])
+  for idx in range(1, values.shape[0]):
+    value = bool(values[idx])
+    if value == current:
+      continue
+    segments.append((current, start, idx - 1))
+    start = idx
+    current = value
+  segments.append((current, start, values.shape[0] - 1))
+  return segments
+
+
+def _cleanup_airborne_mask(mask: np.ndarray, min_segment_frames: int) -> np.ndarray:
+  if min_segment_frames <= 1 or mask.size == 0:
+    return mask.copy()
+
+  cleaned = mask.astype(bool).copy()
+  changed = True
+  while changed:
+    changed = False
+    segments = _boolean_segments(cleaned)
+    for idx, (value, start, end) in enumerate(segments):
+      seg_len = end - start + 1
+      if value and seg_len < min_segment_frames:
+        cleaned[start : end + 1] = False
+        changed = True
+        break
+      if (
+        not value
+        and 0 < idx < len(segments) - 1
+        and segments[idx - 1][0]
+        and segments[idx + 1][0]
+        and seg_len < min_segment_frames
+      ):
+        cleaned[start : end + 1] = True
+        changed = True
+        break
+  return cleaned
+
+
+def _kmeans_two_centers(values: np.ndarray, max_iters: int = 32) -> tuple[float, float]:
+  flat_values = np.asarray(values, dtype=np.float64).reshape(-1)
+  if flat_values.size == 0:
+    raise ValueError("Cannot infer phase control points from an empty signal.")
+
+  low = float(np.quantile(flat_values, 0.15))
+  high = float(np.quantile(flat_values, 0.85))
+  if high - low < 1e-6:
+    return low, high
+
+  for _ in range(max_iters):
+    assign_high = np.abs(flat_values - high) < np.abs(flat_values - low)
+    if assign_high.all() or (~assign_high).all():
+      break
+    new_low = float(flat_values[~assign_high].mean())
+    new_high = float(flat_values[assign_high].mean())
+    if max(abs(new_low - low), abs(new_high - high)) < 1e-6:
+      low, high = new_low, new_high
+      break
+    low, high = new_low, new_high
+
+  if low > high:
+    low, high = high, low
+  return low, high
+
+
+def suggest_phase_blend_control_points(
+  *,
+  foot_heights: np.ndarray,
+  output_dt: float,
+  phase_window_s: float,
+  phase_grounded_height: float | None = None,
+  phase_airborne_height: float | None = None,
+  phase_blend_points: str | None = None,
+) -> PhaseBlendControlSuggestion:
+  phase_window_frames = max(0, int(round(phase_window_s / output_dt)))
+  nearby_foot_height = _symmetric_window_max(
+    np.asarray(foot_heights, dtype=np.float64),
+    phase_window_frames,
+  ).astype(np.float64)
+  grounded_center, airborne_center = _kmeans_two_centers(nearby_foot_height)
+
+  midpoint = 0.5 * (grounded_center + airborne_center)
+  min_segment_frames = max(2, int(round(max(0.08, 0.5 * phase_window_s) / output_dt)))
+  airborne_mask = nearby_foot_height >= midpoint
+  airborne_mask = _cleanup_airborne_mask(airborne_mask, min_segment_frames)
+  airborne_segments = sum(1 for value, _, _ in _boolean_segments(airborne_mask) if value)
+  airborne_frame_ratio = float(airborne_mask.mean())
+
+  auto_grounded_height: float
+  auto_airborne_height: float
+  dynamic_range = max(0.0, airborne_center - grounded_center)
+  if (
+    dynamic_range < 0.04
+    or airborne_segments == 0
+    or airborne_frame_ratio < 0.04
+    or (~airborne_mask).sum() == 0
+  ):
+    auto_grounded_height = float(np.quantile(nearby_foot_height, 0.85))
+    auto_airborne_height = auto_grounded_height + max(0.04, 0.6 * max(dynamic_range, 0.02))
+    auto_note = (
+      "No clear airborne plateau was detected, so the suggested ramp stays conservative."
+    )
+  else:
+    grounded_values = nearby_foot_height[~airborne_mask]
+    airborne_values = nearby_foot_height[airborne_mask]
+    auto_grounded_height = float(np.quantile(grounded_values, 0.90))
+    auto_airborne_height = float(np.quantile(airborne_values, 0.10))
+    min_gap = max(0.02, 0.20 * dynamic_range)
+    if auto_airborne_height <= auto_grounded_height + min_gap:
+      midpoint = 0.5 * (auto_grounded_height + auto_airborne_height)
+      auto_grounded_height = midpoint - 0.5 * min_gap
+      auto_airborne_height = midpoint + 0.5 * min_gap
+    auto_note = (
+      "Control points were auto-inferred from the motion's nearby foot-height clusters."
+    )
+
+  if phase_blend_points is not None and phase_blend_points.strip():
+    control_points = _resolve_phase_blend_control_points(
+      phase_grounded_height=0.0,
+      phase_airborne_height=1.0,
+      phase_blend_points=phase_blend_points,
+    )
+    source = "manual_blend_points"
+    note = "Using the explicit `phase_blend_points` override."
+  else:
+    grounded_height = (
+      auto_grounded_height
+      if phase_grounded_height is None
+      else float(phase_grounded_height)
+    )
+    airborne_height = (
+      auto_airborne_height
+      if phase_airborne_height is None
+      else float(phase_airborne_height)
+    )
+    if airborne_height <= grounded_height:
+      airborne_height = grounded_height + max(0.02, 0.20 * max(dynamic_range, 0.02))
+    control_points = np.asarray(
+      [
+        [grounded_height, 0.0],
+        [airborne_height, 1.0],
+      ],
+      dtype=np.float64,
+    )
+    if phase_grounded_height is None and phase_airborne_height is None:
+      source = "auto_inferred"
+      note = auto_note
+    elif phase_grounded_height is None or phase_airborne_height is None:
+      source = "mixed_manual_auto"
+      note = "One phase height was provided manually; the other was auto-inferred."
+    else:
+      source = "manual_heights"
+      note = "Using the explicit grounded/airborne phase heights."
+
+  return PhaseBlendControlSuggestion(
+    control_points=control_points,
+    source=source,
+    note=note,
+    nearby_foot_height=nearby_foot_height.astype(np.float32),
+    grounded_center=grounded_center,
+    airborne_center=airborne_center,
+    airborne_segments=airborne_segments,
+    airborne_frame_ratio=airborne_frame_ratio,
+  )
+
+
+def _resolve_phase_blend_control_points(
+  *,
+  phase_grounded_height: float,
+  phase_airborne_height: float,
+  phase_blend_points: str | None,
+) -> np.ndarray:
+  if phase_blend_points is None or not phase_blend_points.strip():
+    if phase_airborne_height <= phase_grounded_height:
+      raise ValueError(
+        "`phase_airborne_height` must be greater than `phase_grounded_height`."
+      )
+    return np.asarray(
+      [
+        [phase_grounded_height, 0.0],
+        [phase_airborne_height, 1.0],
+      ],
+      dtype=np.float64,
+    )
+
+  parsed_points: list[tuple[float, float]] = []
+  for raw_item in phase_blend_points.split(","):
+    item = raw_item.strip()
+    if not item:
+      continue
+    if ":" not in item:
+      raise ValueError(
+        "Each `phase_blend_points` item must use `foot_height:blend_weight` format. "
+        f"Got: {item!r}"
+      )
+    height_str, weight_str = item.split(":", 1)
+    height = float(height_str.strip())
+    weight = float(weight_str.strip())
+    if not 0.0 <= weight <= 1.0:
+      raise ValueError(
+        "Blend weights in `phase_blend_points` must stay within [0, 1]. "
+        f"Got {weight} for item {item!r}."
+      )
+    parsed_points.append((height, weight))
+
+  if not parsed_points:
+    raise ValueError("`phase_blend_points` did not contain any valid control points.")
+
+  parsed_points.sort(key=lambda x: x[0])
+  for idx in range(1, len(parsed_points)):
+    if parsed_points[idx][0] <= parsed_points[idx - 1][0]:
+      raise ValueError(
+        "`phase_blend_points` heights must be strictly increasing after sorting."
+      )
+  return np.asarray(parsed_points, dtype=np.float64)
+
+
+def compute_phased_ground_alignment_offsets(
+  *,
+  foot_stats: GroundingStats,
+  whole_body_stats: CollisionGroundingStats,
+  clearance: float,
+  output_dt: float,
+  phase_blend_control_points: np.ndarray,
+  phase_window_s: float,
+  phase_lookahead_s: float,
+  phase_smoothing_s: float,
+) -> np.ndarray:
+  foot_required = np.maximum(0.0, clearance - foot_stats.frame_min_foot_z).astype(
+    np.float64
+  )
+  whole_body_required = np.maximum(
+    0.0, clearance - whole_body_stats.frame_min_bottom_z
+  ).astype(np.float64)
+
+  phase_window_frames = max(0, int(round(phase_window_s / output_dt)))
+  lookahead_frames = max(1, int(round(phase_lookahead_s / output_dt)))
+  smoothing_frames = max(0, int(round(phase_smoothing_s / output_dt)))
+
+  nearby_foot_height = _symmetric_window_max(foot_stats.frame_min_foot_z, phase_window_frames)
+  if phase_blend_control_points.shape[0] == 1:
+    blend_weight = np.full(
+      nearby_foot_height.shape,
+      phase_blend_control_points[0, 1],
+      dtype=np.float64,
+    )
+  else:
+    blend_weight = np.interp(
+      nearby_foot_height,
+      phase_blend_control_points[:, 0],
+      phase_blend_control_points[:, 1],
+    )
+  upcoming_whole_body_required = _forward_window_max(
+    whole_body_required, lookahead_frames
+  )
+  base_offsets = foot_required + blend_weight * (
+    upcoming_whole_body_required - foot_required
+  )
+  phased_offsets = _edge_smoothed(base_offsets, smoothing_frames)
+  phased_offsets = np.maximum(phased_offsets, base_offsets)
+  phased_offsets = np.maximum(phased_offsets, foot_required)
+  phased_offsets = np.minimum(
+    phased_offsets, np.maximum(upcoming_whole_body_required, foot_required)
+  )
+  return phased_offsets.astype(np.float32)
 
 
 def run_sim(
@@ -454,8 +852,15 @@ def run_sim(
   output_name,
   render,
   line_range,
-  ground_align: Literal["none", "global"],
+  ground_align: Literal["none", "global", "phased"],
   clearance: float,
+  whole_body_geom_pattern: str,
+  phase_grounded_height: float,
+  phase_airborne_height: float,
+  phase_blend_points: str | None,
+  phase_window_s: float,
+  phase_lookahead_s: float,
+  phase_smoothing_s: float,
   renderer: OffscreenRenderer | None = None,
 ):
   output_path = Path(output_name)
@@ -489,6 +894,61 @@ def run_sim(
       f"recommended global z offset = {grounding_stats.recommended_delta_z:.4f} m"
     )
     apply_global_ground_alignment(motion, grounding_stats)
+  elif ground_align == "phased":
+    print(
+      "Analyzing phased ground alignment with "
+      f"clearance target {clearance:.3f} m..."
+    )
+    grounding_stats = analyze_foot_penetration(
+      sim=sim,
+      scene=scene,
+      robot=robot,
+      robot_joint_indexes=robot_joint_indexes,
+      motion=motion,
+      clearance=clearance,
+      show_progress=True,
+    )
+    whole_body_stats = analyze_collision_grounding(
+      sim=sim,
+      scene=scene,
+      robot=robot,
+      robot_joint_indexes=robot_joint_indexes,
+      motion=motion,
+      clearance=clearance,
+      geom_pattern=whole_body_geom_pattern,
+      show_progress=False,
+    )
+    phase_blend_control_points = _resolve_phase_blend_control_points(
+      phase_grounded_height=phase_grounded_height,
+      phase_airborne_height=phase_airborne_height,
+      phase_blend_points=phase_blend_points,
+    )
+    phased_offsets = compute_phased_ground_alignment_offsets(
+      foot_stats=grounding_stats,
+      whole_body_stats=whole_body_stats,
+      clearance=clearance,
+      output_dt=motion.output_dt,
+      phase_blend_control_points=phase_blend_control_points,
+      phase_window_s=phase_window_s,
+      phase_lookahead_s=phase_lookahead_s,
+      phase_smoothing_s=phase_smoothing_s,
+    )
+    print(
+      "Phased grounding analysis complete: "
+      f"foot min = {grounding_stats.global_min_foot_z:.4f} m, "
+      f"whole-body min = {whole_body_stats.global_min_bottom_z:.4f} m "
+      f"({whole_body_stats.global_min_geom_name}), "
+      f"frame-wise offset range = [{float(phased_offsets.min()):.4f}, "
+      f"{float(phased_offsets.max()):.4f}] m"
+    )
+    print(
+      "Phased alignment settings: "
+      f"blend_points={phase_blend_control_points.tolist()}, "
+      f"window={phase_window_s:.3f} s, "
+      f"lookahead={phase_lookahead_s:.3f} s, "
+      f"smoothing={phase_smoothing_s:.3f} s"
+    )
+    motion.apply_root_z_offset(phased_offsets)
   else:
     print("Ground alignment disabled; using raw motion root heights.")
 
@@ -603,8 +1063,15 @@ def main(
   output_fps: float = 50.0,
   device: str = "cuda:0",
   render: bool = False,
-  ground_align: Literal["none", "global"] = "none",
+  ground_align: Literal["none", "global", "phased"] = "none",
   clearance: float = 0.01,
+  whole_body_geom_pattern: str = ALL_COLLISION_GEOM_PATTERN,
+  phase_grounded_height: float = 0.03,
+  phase_airborne_height: float = 0.10,
+  phase_blend_points: str | None = None,
+  phase_window_s: float = 0.12,
+  phase_lookahead_s: float = 0.24,
+  phase_smoothing_s: float = 0.08,
   line_range: tuple[int, int] | None = None,
 ):
   """Replay motion from CSV file and output to npz file.
@@ -620,6 +1087,13 @@ def main(
     render: Whether to render the simulation and save a video.
     ground_align: Ground alignment mode for the motion root.
     clearance: Target minimum foot-bottom clearance above the ground plane.
+    whole_body_geom_pattern: Regex used by phased alignment to measure whole-body collisions.
+    phase_grounded_height: Default lower control point for phased alignment when no custom blend points are provided.
+    phase_airborne_height: Default upper control point for phased alignment when no custom blend points are provided.
+    phase_blend_points: Optional custom phased control points in `foot_height:blend_weight` format separated by commas.
+    phase_window_s: Symmetric foot-height neighborhood used to classify grounded vs airborne phases.
+    phase_lookahead_s: Future lookahead window used to prepare airborne lift before landing.
+    phase_smoothing_s: Temporal smoothing applied to phased per-frame root z offsets.
     line_range: Range of lines to process from the CSV file.
   """
   using_single = input_file is not None or output_name is not None
@@ -654,6 +1128,13 @@ def main(
         render=render,
         ground_align=ground_align,
         clearance=clearance,
+        whole_body_geom_pattern=whole_body_geom_pattern,
+        phase_grounded_height=phase_grounded_height,
+        phase_airborne_height=phase_airborne_height,
+        phase_blend_points=phase_blend_points,
+        phase_window_s=phase_window_s,
+        phase_lookahead_s=phase_lookahead_s,
+        phase_smoothing_s=phase_smoothing_s,
         line_range=line_range,
         renderer=renderer,
       )
@@ -708,6 +1189,13 @@ def main(
           render=render,
           ground_align=ground_align,
           clearance=clearance,
+          whole_body_geom_pattern=whole_body_geom_pattern,
+          phase_grounded_height=phase_grounded_height,
+          phase_airborne_height=phase_airborne_height,
+          phase_blend_points=phase_blend_points,
+          phase_window_s=phase_window_s,
+          phase_lookahead_s=phase_lookahead_s,
+          phase_smoothing_s=phase_smoothing_s,
           line_range=line_range,
           renderer=renderer,
         )
