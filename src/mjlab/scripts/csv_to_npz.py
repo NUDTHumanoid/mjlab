@@ -13,6 +13,9 @@ from mjlab.entity import Entity
 from mjlab.scene import Scene
 from mjlab.sim.sim import Simulation, SimulationCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
+from mjlab.tasks.tracking.config.g1_new.env_cfgs import (
+  unitree_g1_new_flat_tracking_env_cfg,
+)
 from mjlab.utils.lab_api.math import (
   axis_angle_from_quat,
   quat_apply,
@@ -56,6 +59,7 @@ G1_TRACKING_JOINT_NAMES = [
 ]
 G1_FOOT_GEOM_PATTERN = r"^(left|right)_foot[1-7]_collision$"
 ALL_COLLISION_GEOM_PATTERN = r".*_collision$"
+RobotVariant = Literal["g1", "g1_new"]
 
 
 @dataclass(frozen=True)
@@ -330,11 +334,17 @@ def build_tracking_sim(
   output_fps: float,
   device: str,
   render: bool = False,
+  robot_variant: RobotVariant = "g1",
 ) -> tuple[Simulation, Scene, OffscreenRenderer | None]:
   sim_cfg = SimulationCfg()
   sim_cfg.mujoco.timestep = 1.0 / output_fps
 
-  scene = Scene(unitree_g1_flat_tracking_env_cfg().scene, device=device)
+  if robot_variant == "g1_new":
+    env_cfg = unitree_g1_new_flat_tracking_env_cfg()
+  else:
+    env_cfg = unitree_g1_flat_tracking_env_cfg()
+
+  scene = Scene(env_cfg.scene, device=device)
   model = scene.compile()
 
   sim = Simulation(num_envs=1, cfg=sim_cfg, model=model, device=device)
@@ -1091,6 +1101,7 @@ def main(
   phase_window_s: float = 0.12,
   phase_lookahead_s: float = 0.24,
   phase_smoothing_s: float = 0.08,
+  robot_variant: RobotVariant = "g1",
   line_range: tuple[int, int] | None = None,
 ):
   """Replay motion from CSV file and output to npz file.
@@ -1114,6 +1125,7 @@ def main(
     phase_window_s: Symmetric foot-height neighborhood used to classify grounded vs airborne phases.
     phase_lookahead_s: Future lookahead window used to prepare airborne lift before landing.
     phase_smoothing_s: Temporal smoothing applied to phased per-frame root z offsets.
+    robot_variant: Tracking robot asset used to replay the motion inside MuJoCo.
     line_range: Range of lines to process from the CSV file.
   """
   using_single = input_file is not None or output_name is not None
@@ -1130,6 +1142,7 @@ def main(
     output_fps=output_fps,
     device=device,
     render=render,
+    robot_variant=robot_variant,
   )
   robot, robot_joint_indexes = get_tracking_robot(scene)
   try:

@@ -35,6 +35,10 @@ mjlab combines [Isaac Lab](https://github.com/isaac-sim/IsaacLab)'s manager-base
     - [Stage Curriculum](#stage-curriculum)
     - [Key Differences vs. Flat Tracking](#key-differences-vs-flat-tracking)
   - [Jump Tracking Reward Tuning](#jump-tracking-reward-tuning)
+  - [G1-New (mode_15-aligned)](#g1-new-mode_15-aligned)
+    - [Task ID Mapping](#task-id-mapping)
+    - [Command Examples](#command-examples)
+    - [Current Scope](#current-scope)
   - [Hardware Deployment (BeyondMimic / Unitree G1)](#hardware-deployment-beyondmimic--unitree-g1)
     - [1. Connect to the onboard computer](#1-connect-to-the-onboard-computer)
     - [2. Power on and enter debug mode](#2-power-on-and-enter-debug-mode)
@@ -645,6 +649,85 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1 \
   --env.rewards.action-rate-l2.weight -0.01 \
   --agent.logger tensorboard
 ```
+
+---
+
+## G1-New (mode_15-aligned)
+
+`G1-New` is an isolated Unitree G1 asset variant built from `g1_new.xml` and `g1_constants_new.py`. It keeps the original training-friendly MuJoCo collision structure, while aligning the latest `g1_29dof_mode_15.urdf` torso / wrist geometry and actuator envelopes as closely as practical.
+
+For the full change log and alignment rationale, see [G1_New_Alignment_Notes.md](G1_New_Alignment_Notes.md).
+
+### Task ID Mapping
+
+| Original task ID | New task ID |
+| ---------------- | ----------- |
+| `Mjlab-Velocity-Flat-Unitree-G1` | `Mjlab-Velocity-Flat-Unitree-G1-New` |
+| `Mjlab-Velocity-Rough-Unitree-G1` | `Mjlab-Velocity-Rough-Unitree-G1-New` |
+| `Mjlab-Tracking-Flat-Unitree-G1` | `Mjlab-Tracking-Flat-Unitree-G1-New` |
+| `Mjlab-Tracking-Rough-Unitree-G1` | `Mjlab-Tracking-Rough-Unitree-G1-New` |
+| `Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation` | `Mjlab-Tracking-Flat-Unitree-G1-New-No-State-Estimation` |
+
+### Command Examples
+
+**Velocity training:**
+
+```bash
+uv run train Mjlab-Velocity-Flat-Unitree-G1-New \
+  --env.scene.num-envs 4096
+```
+
+**Tracking training:**
+
+```bash
+uv run train Mjlab-Tracking-Flat-Unitree-G1-New \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --env.scene.num-envs 4096
+```
+
+**Replay a motion with the new robot variant:**
+
+```bash
+uv run replay-motion Mjlab-Tracking-Flat-Unitree-G1-New \
+  --motion-file /path/to/motion.npz \
+  --start-paused \
+  --reference-viz ghost
+```
+
+**Convert CSV to NPZ with the new robot variant:**
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /path/to/motion.csv \
+  --output-name /path/to/motion.npz \
+  --robot-variant g1_new
+```
+
+**Play a trained checkpoint:**
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz
+```
+
+**Rough-terrain tracking:**
+
+```bash
+uv run train Mjlab-Tracking-Rough-Unitree-G1-New \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --env.scene.num-envs 4096 \
+  --checkpoint-file /path/to/flat_checkpoint.pt
+```
+
+### Current Scope
+
+- For most CLI workflows, you can migrate by replacing `Unitree-G1` with `Unitree-G1-New` in the task ID.
+- `train`, `play`, and `replay-motion` already work with the `*-G1-New` task IDs shown above.
+- `csv_to_npz.py` now supports `--robot-variant g1_new`. Because `G1-New` keeps the same 29-DoF joint tree and joint names, this was never a structural blocker, but you can now keep preprocessing aligned as well.
+- If you maintain Python scripts that import configs directly, switch `...tracking.config.g1...` to `...tracking.config.g1_new...`, `...velocity.config.g1...` to `...velocity.config.g1_new...`, and `g1_constants.py` to `g1_constants_new.py`.
+- `g1_new.xml` matches the latest `mode_15` torso / wrist mesh and inertial changes, but it still keeps the original MuJoCo-specific collision simplifications for training stability.
+- `g1_constants_new.py` matches the important `mode_15` joint effort / velocity envelopes, but the wrist reflected inertia is still an approximation because exact `5010` rotor specs are not available in the local codebase.
 
 ---
 
