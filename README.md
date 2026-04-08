@@ -79,58 +79,6 @@ uv run play Mjlab-Tracking-Flat-Unitree-G1 \
   --motion-file /path/to/motion.npz
 ```
 
-Play a trained policy with a play-only window obstacle in front of the motion:
-
-```bash
-uv run play Mjlab-Tracking-Flat-Unitree-G1 \
-  --checkpoint-file /path/to/model.pt \
-  --motion-file /path/to/motion.npz \
-  --play-window
-```
-
-With `--play-window`, the script adds a static window-frame obstacle only in the
-`play` scene. It does not modify training, `replay-motion`, or the source `.npz`.
-By default it uses:
-
-- opening size `0.88 x 0.88 m`
-- thickness `0.40 m`
-- sill height `0.49 m`
-- outer frame size `2.0 x 2.2 m`
-- auto placement aligned to the motion path using the tracking anchor body
-
-Useful window parameters:
-
-- `--play-window-pose-mode {auto,manual}`: `auto` aligns the window to the motion, `manual` uses explicit center coordinates.
-- `--play-window-opening-width` / `--play-window-opening-height`: clear opening size in meters.
-- `--play-window-thickness`: obstacle depth along the travel direction.
-- `--play-window-sill-height`: lower edge of the opening above the ground.
-- `--play-window-outer-width` / `--play-window-outer-height`: full frame size. Increase these if you want more surrounding wall area.
-- `--play-window-align-body-name`: body used for auto placement. Defaults to the motion anchor body, usually `torso_link` for G1 tracking.
-- `--play-window-frame-index`: optional explicit motion frame to align against in auto mode.
-- `--play-window-offset-x`, `--play-window-offset-y`, `--play-window-offset-z`: small nudges after auto placement.
-
-Example using your current checkpoint and motion:
-
-```bash
-uv run play Mjlab-Tracking-Flat-Unitree-G1 \
-  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-04-08_01-55-09/model_12000.pt \
-  --motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto.npz \
-  --play-window
-```
-
-If the auto-placed window looks slightly early, late, left, or right, start by
-keeping `--play-window-pose-mode auto` and adjust only the offsets, for example:
-
-```bash
-uv run play Mjlab-Tracking-Flat-Unitree-G1 \
-  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-04-08_01-55-09/model_12000.pt \
-  --motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto.npz \
-  --play-window \
-  --play-window-offset-x 0.15 \
-  --play-window-offset-y 0.00 \
-  --play-window-offset-z 0.00
-```
-
 Replay a motion `.npz` directly in MuJoCo without loading a policy:
 
 ```bash
@@ -211,7 +159,7 @@ If your source motion comes from SONIC/BONES-style CSV export, first convert it 
 the mimic-compatible numeric CSV expected by the downstream motion tools:
 
 ```bash
-python src/mjlab/scripts/sonic2mimic.py \
+uv run src/mjlab/scripts/sonic2mimic.py \
   --inputs /home/nubot/workspace/mjlab/datasets/csv/body_stretch_3_002__A052.csv
 ```
 
@@ -242,7 +190,7 @@ Frame Time: 0.008333 #broad_jump_004__A359_M.bvh,0.008333 ≈ 1 / 120fps
 ```
 
 ```bash
-python src/mjlab/scripts/sonic2mimic.py \
+uv run src/mjlab/scripts/sonic2mimic.py \
   --inputm /home/nubot/workspace/mjlab/datasets/csv/jumpforward \
   --outputm /home/nubot/workspace/mjlab/datasets/csv_mimic/jumpforward
 ```
