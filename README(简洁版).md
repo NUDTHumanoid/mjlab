@@ -35,6 +35,12 @@ mjlab combines [Isaac Lab](https://github.com/isaac-sim/IsaacLab)'s manager-base
     - [Stage Curriculum](#stage-curriculum)
     - [Key Differences vs. Flat Tracking](#key-differences-vs-flat-tracking)
   - [Jump Tracking Reward Tuning](#jump-tracking-reward-tuning)
+  - [Hardware Deployment (BeyondMimic / Unitree G1)](#hardware-deployment-beyondmimic--unitree-g1)
+    - [1. Connect to the onboard computer](#1-connect-to-the-onboard-computer)
+    - [2. Power on and enter debug mode](#2-power-on-and-enter-debug-mode)
+    - [3. Load the policy](#3-load-the-policy)
+    - [4. Run, stop, and emergency stop](#4-run-stop-and-emergency-stop)
+    - [5. Shutdown](#5-shutdown)
   - [Documentation](#documentation)
   - [Development](#development)
   - [Citation](#citation)
@@ -639,6 +645,112 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1 \
   --env.rewards.action-rate-l2.weight -0.01 \
   --agent.logger tensorboard
 ```
+
+---
+
+## Hardware Deployment (BeyondMimic / Unitree G1)
+
+This section condenses the practical real-robot deployment steps from the local BeyondMimic notes into a README-friendly checklist.
+
+### 1. Connect to the onboard computer
+
+Default access from the current deployment notes:
+
+- Username: `unitree`
+- Password: `123`
+- Onboard computer IP: `192.168.123.164`
+
+Connection options:
+
+- External monitor and keyboard directly attached to the robot's onboard computer
+- NoMachine remote desktop
+- `ssh unitree@192.168.123.164` from a terminal or VS Code Remote SSH
+
+SSH + `tmux` is the most robust workflow because your remote session keeps running even if the local network drops:
+
+```bash
+ssh unitree@192.168.123.164
+sudo apt install tmux
+nano ~/.tmux.conf
+```
+
+Add the following to `~/.tmux.conf`:
+
+```bash
+set -g mouse on
+```
+
+Then reload and use tmux:
+
+```bash
+tmux source-file ~/.tmux.conf
+tmux new -s my_work
+tmux ls
+tmux attach -t my_work
+```
+
+Useful tmux shortcuts:
+
+- `Ctrl+B`, then `%`: split left/right
+- `Ctrl+B`, then `"`: split top/bottom
+- `Ctrl+B`, then arrow key: move between panes
+- `Ctrl+B`, then `[`: enter scrollback mode
+- `q`: exit scrollback mode
+- `Ctrl+D` or `exit`: close the current pane or session
+
+Reference: [Unitree G1 developer guide](https://support.unitree.com/home/zh/G1_developer/about_G1)
+
+### 2. Power on and enter debug mode
+
+1. Press then long-press the power button on the robot's left waist to power on the robot.
+2. Press then long-press the power button on the underside of the controller to power on the controller. It should pair automatically with the robot.
+3. After boot, the robot enters zero-torque mode.
+4. Press `L2+R2` to enter debug mode.
+5. Press `L2+A` to trigger the diagnostic pose, where G1 raises its arms.
+6. Press `L2+B` to enter damping mode, where G1 lowers its arms.
+
+### 3. Load the policy
+
+Recommended path: open the deployment container from VS Code, copy the `.onnx` policy into `/root/colcon_ws/`, then launch:
+
+```bash
+source /opt/ros/humble/setup.bash
+cd /root/colcon_ws
+source install/setup.bash
+ros2 launch motion_tracking_controller real.launch.py \
+  network_interface:=eth0 \
+  policy_path:=policy_dance.onnx
+```
+
+If VS Code is temporarily unavailable, use Docker directly:
+
+```bash
+docker ps -a
+docker start beyondmimic-dicengkongzhi
+docker ps
+docker cp /home/unitree/policy_dance.onnx beyondmimic-dicengkongzhi:/root/colcon_ws/policy_dance.onnx
+docker exec -it beyondmimic-dicengkongzhi bash
+```
+
+After entering the container, run the same ROS 2 launch steps shown above.
+
+### 4. Run, stop, and emergency stop
+
+Once `ros2 launch` succeeds, G1 enters standby mode and you can disconnect the robot from the dock.
+
+- Press `R1+A` to start the policy
+- Press `L1+A` to stop the policy and return to standby
+- Press `B` for emergency stop
+
+### 5. Shutdown
+
+1. Reconnect the robot to the dock after the demo.
+2. Press `Ctrl+C` in the deployment terminal to stop the program.
+3. Press `L2+R2` to re-enter debug mode.
+4. Press `L2+B` to return G1 to damping mode.
+5. After the robot is stable in damping mode, short-press then long-press the battery power button for a safe shutdown.
+
+> **Note:** The credentials, IP address, container name, and policy file name above are copied from the current local deployment notes. If your robot or network setup differs, update these values before running the commands.
 
 ---
 
