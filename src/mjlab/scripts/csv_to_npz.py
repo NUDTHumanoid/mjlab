@@ -855,8 +855,9 @@ def run_sim(
   ground_align: Literal["none", "global", "phased"],
   clearance: float,
   whole_body_geom_pattern: str,
-  phase_grounded_height: float,
-  phase_airborne_height: float,
+  phase_control_mode: Literal["manual", "auto"],
+  phase_grounded_height: float | None,
+  phase_airborne_height: float | None,
   phase_blend_points: str | None,
   phase_window_s: float,
   phase_lookahead_s: float,
@@ -918,11 +919,15 @@ def run_sim(
       geom_pattern=whole_body_geom_pattern,
       show_progress=False,
     )
-    phase_blend_control_points = _resolve_phase_blend_control_points(
-      phase_grounded_height=phase_grounded_height,
-      phase_airborne_height=phase_airborne_height,
+    phase_control = suggest_phase_blend_control_points(
+      foot_heights=grounding_stats.frame_min_foot_z,
+      output_dt=motion.output_dt,
+      phase_window_s=phase_window_s,
+      phase_grounded_height=None if phase_control_mode == "auto" else phase_grounded_height,
+      phase_airborne_height=None if phase_control_mode == "auto" else phase_airborne_height,
       phase_blend_points=phase_blend_points,
     )
+    phase_blend_control_points = phase_control.control_points
     phased_offsets = compute_phased_ground_alignment_offsets(
       foot_stats=grounding_stats,
       whole_body_stats=whole_body_stats,
@@ -943,11 +948,24 @@ def run_sim(
     )
     print(
       "Phased alignment settings: "
+      f"mode={phase_control_mode}, "
+      f"source={phase_control.source}, "
       f"blend_points={phase_blend_control_points.tolist()}, "
       f"window={phase_window_s:.3f} s, "
       f"lookahead={phase_lookahead_s:.3f} s, "
       f"smoothing={phase_smoothing_s:.3f} s"
     )
+    grounded_height = phase_control.grounded_height
+    airborne_height = phase_control.airborne_height
+    if grounded_height is not None and airborne_height is not None:
+      print(
+        "Phased control-point summary: "
+        f"grounded_height={grounded_height:.4f} m, "
+        f"airborne_height={airborne_height:.4f} m, "
+        f"detected_airborne_segments={phase_control.airborne_segments}, "
+        f"airborne_frame_ratio={phase_control.airborne_frame_ratio:.3f}"
+      )
+    print(f"Phased control-point note: {phase_control.note}")
     motion.apply_root_z_offset(phased_offsets)
   else:
     print("Ground alignment disabled; using raw motion root heights.")
@@ -1066,8 +1084,9 @@ def main(
   ground_align: Literal["none", "global", "phased"] = "none",
   clearance: float = 0.01,
   whole_body_geom_pattern: str = ALL_COLLISION_GEOM_PATTERN,
-  phase_grounded_height: float = 0.03,
-  phase_airborne_height: float = 0.10,
+  phase_control_mode: Literal["manual", "auto"] = "manual",
+  phase_grounded_height: float | None = 0.03,
+  phase_airborne_height: float | None = 0.10,
   phase_blend_points: str | None = None,
   phase_window_s: float = 0.12,
   phase_lookahead_s: float = 0.24,
@@ -1088,6 +1107,7 @@ def main(
     ground_align: Ground alignment mode for the motion root.
     clearance: Target minimum foot-bottom clearance above the ground plane.
     whole_body_geom_pattern: Regex used by phased alignment to measure whole-body collisions.
+    phase_control_mode: Whether phased alignment uses manual control points or auto-infers them from motion foot heights.
     phase_grounded_height: Default lower control point for phased alignment when no custom blend points are provided.
     phase_airborne_height: Default upper control point for phased alignment when no custom blend points are provided.
     phase_blend_points: Optional custom phased control points in `foot_height:blend_weight` format separated by commas.
@@ -1129,6 +1149,7 @@ def main(
         ground_align=ground_align,
         clearance=clearance,
         whole_body_geom_pattern=whole_body_geom_pattern,
+        phase_control_mode=phase_control_mode,
         phase_grounded_height=phase_grounded_height,
         phase_airborne_height=phase_airborne_height,
         phase_blend_points=phase_blend_points,
@@ -1190,6 +1211,7 @@ def main(
           ground_align=ground_align,
           clearance=clearance,
           whole_body_geom_pattern=whole_body_geom_pattern,
+          phase_control_mode=phase_control_mode,
           phase_grounded_height=phase_grounded_height,
           phase_airborne_height=phase_airborne_height,
           phase_blend_points=phase_blend_points,

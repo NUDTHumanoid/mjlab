@@ -79,6 +79,58 @@ uv run play Mjlab-Tracking-Flat-Unitree-G1 \
   --motion-file /path/to/motion.npz
 ```
 
+Play a trained policy with a play-only window obstacle in front of the motion:
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1 \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz \
+  --play-window
+```
+
+With `--play-window`, the script adds a static window-frame obstacle only in the
+`play` scene. It does not modify training, `replay-motion`, or the source `.npz`.
+By default it uses:
+
+- opening size `0.88 x 0.88 m`
+- thickness `0.40 m`
+- sill height `0.49 m`
+- outer frame size `2.0 x 2.2 m`
+- auto placement aligned to the motion path using the tracking anchor body
+
+Useful window parameters:
+
+- `--play-window-pose-mode {auto,manual}`: `auto` aligns the window to the motion, `manual` uses explicit center coordinates.
+- `--play-window-opening-width` / `--play-window-opening-height`: clear opening size in meters.
+- `--play-window-thickness`: obstacle depth along the travel direction.
+- `--play-window-sill-height`: lower edge of the opening above the ground.
+- `--play-window-outer-width` / `--play-window-outer-height`: full frame size. Increase these if you want more surrounding wall area.
+- `--play-window-align-body-name`: body used for auto placement. Defaults to the motion anchor body, usually `torso_link` for G1 tracking.
+- `--play-window-frame-index`: optional explicit motion frame to align against in auto mode.
+- `--play-window-offset-x`, `--play-window-offset-y`, `--play-window-offset-z`: small nudges after auto placement.
+
+Example using your current checkpoint and motion:
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1 \
+  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-04-08_01-55-09/model_12000.pt \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto.npz \
+  --play-window
+```
+
+If the auto-placed window looks slightly early, late, left, or right, start by
+keeping `--play-window-pose-mode auto` and adjust only the offsets, for example:
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1 \
+  --checkpoint-file /home/nubot/workspace/mjlab/logs/rsl_rl/g1_tracking/2026-04-08_01-55-09/model_12000.pt \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto.npz \
+  --play-window \
+  --play-window-offset-x 0.15 \
+  --play-window-offset-y 0.00 \
+  --play-window-offset-z 0.00
+```
+
 Replay a motion `.npz` directly in MuJoCo without loading a policy:
 
 ```bash
@@ -303,7 +355,22 @@ Recommended next step after running the analysis:
 4. If the robot starts floating too early during takeoff or after landing, decrease `--phase-lookahead-s`, or make airborne mode harder to enter by raising the heights in `--phase-blend-points`.
 5. Once the replay looks reasonable, use that converted `.npz` for training.
 
-For the exact output shown above, the first conversion command to try would be:
+Worked example using the exact output shown above:
+
+```text
+Automatic phased-alignment suggestion
+  suggested_phase_blend_points: "0.049:0.00,0.593:1.00"
+  csv_to_npz_hint: --ground-align phased --phase-blend-points "0.049:0.00,0.593:1.00"
+
+Suggested coarse phases
+  phase= 1  type=grounded  ...
+  phase= 2  type=takeoff   ...
+  phase= 3  type=airborne  ...
+  phase= 4  type=landing   ...
+  phase= 5  type=grounded  ...
+```
+
+Example A: replay the exact inferred control points from the analysis output:
 
 ```bash
 MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
@@ -317,7 +384,87 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
   --render True
 ```
 
-That command uses the auto-inferred phase control points from the analysis output. You can treat it as the first candidate `.npz`, not necessarily the final one.
+That command uses the auto-inferred phase control points from the analysis output. It is the best choice when you want your first conversion to match the analysis result exactly.
+
+Example B: skip the manual copy step and let `csv_to_npz.py` auto-infer phase control points directly:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_phased_auto_direct.npz \
+  --input-fps 120 \
+  --output-fps 50 \
+  --ground-align phased \
+  --phase-control-mode auto \
+  --clearance 0.01 \
+  --render True
+```
+
+This new `--phase-control-mode auto` mode uses the same motion-driven phase-control inference directly inside `csv_to_npz.py`, so it is easier to migrate to future aerial motions. You can still use `replay-motion` afterward to check the result and then fine-tune if needed.
+
+Shortest end-to-end path for a new aerial motion:
+
+1. Analyze the CSV and inspect the suggested phases:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.analyze_foot_penetration \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --input-fps 120 \
+  --output-fps 50 \
+  --clearance 0.01
+```
+
+What to look for:
+
+- If `Whole-body collision recommended_global_z_offset_m` is much larger than the foot-based one, prefer `--ground-align phased` instead of `global`.
+- Check whether `Suggested coarse phases` looks reasonable for the motion, especially the `takeoff`, `airborne`, and `landing` windows.
+
+2. Convert the CSV directly into an aligned training `.npz` using auto phase control:
+
+```bash
+MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
+  --input-file /home/nubot/workspace/mjlab/datasets/csv/tiger_jump_to_shoulder_roll_R_001__A415_M_mimic.csv \
+  --output-name /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_train_auto.npz \
+  --input-fps 120 \
+  --output-fps 50 \
+  --ground-align phased \
+  --phase-control-mode auto \
+  --clearance 0.01 \
+  --render True
+```
+
+This creates both:
+
+- `/home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_train_auto.npz`
+- `/home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_train_auto.mp4`
+
+3. Replay the converted `.npz` in MuJoCo before training:
+
+```bash
+uv run replay-motion Mjlab-Tracking-Flat-Unitree-G1 \
+  --motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_train_auto.npz \
+  --start-paused \
+  --reference-viz ghost
+```
+
+What to inspect in `replay-motion`:
+
+- Step through the `landing` frames with `Right Arrow`.
+- Watch whether the head, torso, and hands still dip into the ground.
+- Watch the overlay `min_foot_bottom_z` to confirm the post-conversion foot clearance is behaving as expected.
+- If the motion still lands too low, go back to step 2 and tune the phased parameters, or run the analysis script again and use the printed `suggested_phase_blend_points` explicitly.
+
+4. Train with the same `.npz` after the replay looks acceptable:
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1 \
+  --env.commands.motion.motion-file /home/nubot/workspace/mjlab/datasets/npz/tiger_jump_to_shoulder_roll_R_001__A415_M_train_auto.npz \
+  --env.scene.num-envs 4096 \
+  --agent.logger tensorboard \
+  --agent.upload-model False
+```
+
+The important rule is: the `.npz` you replay and the `.npz` you train on should be the same file. That keeps your inspection result, training reference motion, and later evaluation aligned.
 
 If you already know the exact phased settings you want to test, you can still override the auto-inferred behavior manually:
 
@@ -360,9 +507,8 @@ MUJOCO_GL=egl uv run -m mjlab.scripts.csv_to_npz \
   --input-fps 120 \
   --output-fps 50 \
   --ground-align phased \
+  --phase-control-mode auto \
   --clearance 0.01 \
-  --phase-grounded-height 0.03 \
-  --phase-airborne-height 0.10 \
   --phase-window-s 0.12 \
   --phase-lookahead-s 0.24 \
   --phase-smoothing-s 0.08 \
@@ -375,6 +521,7 @@ Detailed phased-parameter guide:
 
 - `--clearance`: target minimum foot-bottom clearance after alignment. Start with `0.01`. Increase it if the feet still scrape the plane; decrease it if the whole motion looks unnecessarily lifted near takeoff or stance.
 - `--whole-body-geom-pattern`: regex for the collision geoms that are allowed to request extra airborne lift. The default `.*_collision$` includes head, torso, hands, feet, and other collision bodies. Narrow it if you only want a subset of bodies to matter.
+- `--phase-control-mode`: `manual` keeps the previous behavior and uses `--phase-grounded-height` / `--phase-airborne-height` unless `--phase-blend-points` is provided. `auto` infers the phase control points from the motion's nearby foot-height distribution, which is the easier starting point for new aerial motions.
 - `--phase-grounded-height`: lower default control point for foot height. When the local foot-bottom height is at or below this value, phased alignment behaves like foot-based alignment and avoids large extra lift. Raise it if you want the airborne logic to activate earlier; lower it if you want more frames to stay close to the original grounded height.
 - `--phase-airborne-height`: upper default control point for foot height. When the local foot-bottom height is at or above this value, phased alignment allows full whole-body-driven lift. Lower it if flips should enter airborne protection sooner; raise it if only clearly airborne windows should get the larger lift.
 - `--phase-window-s`: symmetric foot-height context window used to classify whether a frame belongs to a grounded or airborne neighborhood. Larger values make phase decisions steadier but less responsive; smaller values make them react faster but can create jitter around takeoff and landing.
@@ -384,7 +531,7 @@ Detailed phased-parameter guide:
 Recommended phased-tuning workflow:
 
 - Step 1: run `analyze_foot_penetration.py` and note the worst foot frame, the worst whole-body frame, and the suggested coarse phases with their recommended lift ranges.
-- Step 2: start from `--ground-align phased --clearance 0.01` with the default phased parameters.
+- Step 2: start from either `--ground-align phased --phase-control-mode auto --clearance 0.01`, or from the exact `--phase-blend-points` printed by the analysis output.
 - Step 3: if landing bodies still dip below the plane, first increase `--phase-lookahead-s`, then decrease `--phase-airborne-height`.
 - Step 4: if the whole jump or roll starts to look too high too early, decrease `--phase-lookahead-s` or increase `--phase-airborne-height`.
 - Step 5: if transitions look abrupt, increase `--phase-smoothing-s` a little. If too much of the motion is being lifted, decrease it.

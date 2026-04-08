@@ -6,9 +6,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+import mujoco
+import numpy as np
 import torch
 import tyro
 
+from mjlab.entity import EntityCfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
@@ -38,9 +41,216 @@ class PlayConfig:
   viewer: Literal["auto", "native", "viser"] = "auto"
   no_terminations: bool = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
+  play_window: bool = False
+  """Spawn a play-only window-frame obstacle into the MuJoCo scene."""
+  play_window_pose_mode: Literal["auto", "manual"] = "auto"
+  """Auto aligns the window to the motion path, manual uses explicit center coordinates."""
+  play_window_opening_width: float = 0.88
+  play_window_opening_height: float = 0.88
+  play_window_thickness: float = 0.40
+  play_window_sill_height: float = 0.49
+  play_window_outer_width: float = 2.0
+  play_window_outer_height: float = 2.2
+  play_window_center_x: float | None = None
+  play_window_center_y: float | None = None
+  play_window_center_z: float | None = None
+  play_window_offset_x: float = 0.0
+  play_window_offset_y: float = 0.0
+  play_window_offset_z: float = 0.0
+  play_window_align_body_name: str | None = None
+  """Body name used for auto placement. Defaults to the tracking anchor body."""
+  play_window_frame_index: int | None = None
+  """Optional explicit motion frame index to align the window against in auto mode."""
 
   # Internal flag used by demo script.
   _demo_mode: tyro.conf.Suppress[bool] = False
+
+
+def _make_play_window_spec(
+  *,
+  center: tuple[float, float, float],
+  opening_width: float,
+  opening_height: float,
+  thickness: float,
+  sill_height: float,
+  outer_width: float,
+  outer_height: float,
+  rgba: tuple[float, float, float, float] = (0.16, 0.72, 0.92, 0.45),
+) -> mujoco.MjSpec:
+  if opening_width <= 0.0 or opening_height <= 0.0 or thickness <= 0.0:
+    raise ValueError("Window opening width/height and thickness must be positive.")
+  if sill_height < 0.0:
+    raise ValueError("Window sill height must be non-negative.")
+  if outer_width <= opening_width:
+    raise ValueError("Window outer width must be larger than the opening width.")
+  opening_top = sill_height + opening_height
+  if outer_height <= opening_top:
+    raise ValueError(
+      "Window outer height must be larger than sill height + opening height."
+    )
+
+  spec = mujoco.MjSpec()
+  body = spec.worldbody.add_body(name="play_window_frame", pos=center)
+
+  depth_half = thickness / 2.0
+  bottom_half_height = sill_height / 2.0
+  top_height = outer_height - opening_top
+  top_half_height = top_height / 2.0
+  side_width = (outer_width - opening_width) / 2.0
+  side_half_width = side_width / 2.0
+  side_center_y = opening_width / 2.0 + side_half_width
+  wall_center_z = outer_height / 2.0
+
+  if bottom_half_height > 0.0:
+    body.add_geom(
+      name="play_window_bottom",
+      type=mujoco.mjtGeom.mjGEOM_BOX,
+      size=(depth_half, outer_width / 2.0, bottom_half_height),
+      pos=(0.0, 0.0, bottom_half_height),
+      rgba=rgba,
+    )
+
+  body.add_geom(
+    name="play_window_top",
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=(depth_half, outer_width / 2.0, top_half_height),
+    pos=(0.0, 0.0, opening_top + top_half_height),
+    rgba=rgba,
+  )
+  body.add_geom(
+    name="play_window_left",
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=(depth_half, side_half_width, wall_center_z),
+    pos=(0.0, -side_center_y, wall_center_z),
+    rgba=rgba,
+  )
+  body.add_geom(
+    name="play_window_right",
+    type=mujoco.mjtGeom.mjGEOM_BOX,
+    size=(depth_half, side_half_width, wall_center_z),
+    pos=(0.0, side_center_y, wall_center_z),
+    rgba=rgba,
+  )
+  return spec
+
+
+def _resolve_play_window_center(
+  *,
+  cfg: PlayConfig,
+  env_cfg,
+  motion_file: str | None,
+  default_align_body_name: str | None,
+) -> tuple[tuple[float, float, float], str, int | None]:
+  opening_center_z = (
+    cfg.play_window_center_z
+    if cfg.play_window_center_z is not None
+    else cfg.play_window_sill_height + 0.5 * cfg.play_window_opening_height
+  )
+
+  if cfg.play_window_pose_mode == "manual":
+    if cfg.play_window_center_x is None or cfg.play_window_center_y is None:
+      raise ValueError(
+        "Manual play-window placement requires both `--play-window-center-x` "
+        "and `--play-window-center-y`."
+      )
+    center = (
+      cfg.play_window_center_x + cfg.play_window_offset_x,
+      cfg.play_window_center_y + cfg.play_window_offset_y,
+      opening_center_z + cfg.play_window_offset_z,
+    )
+    return center, "manual", None
+
+  if motion_file is None:
+    raise ValueError(
+      "Auto play-window placement requires a resolved motion file. "
+      "Provide `--motion-file` or use a tracking run that resolves one."
+    )
+
+  align_body_name = cfg.play_window_align_body_name or default_align_body_name
+  if align_body_name is None:
+    raise ValueError(
+      "Auto play-window placement could not determine an alignment body. "
+      "Provide `--play-window-align-body-name`."
+    )
+
+  robot_cfg = env_cfg.scene.entities["robot"]
+  robot_entity = robot_cfg.build()
+  try:
+    body_index = robot_entity.body_names.index(align_body_name)
+  except ValueError as exc:
+    raise ValueError(
+      f"Body {align_body_name!r} was not found in the robot body list. "
+      f"Available bodies include: {robot_entity.body_names}"
+    ) from exc
+
+  motion_data = np.load(motion_file)
+  body_pos_w = motion_data["body_pos_w"]
+  if body_index >= body_pos_w.shape[1]:
+    raise ValueError(
+      f"Motion file only contains {body_pos_w.shape[1]} bodies, but body index "
+      f"{body_index} was requested for {align_body_name!r}."
+    )
+
+  if cfg.play_window_frame_index is not None:
+    frame_index = int(cfg.play_window_frame_index)
+    if not 0 <= frame_index < body_pos_w.shape[0]:
+      raise ValueError(
+        f"`--play-window-frame-index` must be within [0, {body_pos_w.shape[0] - 1}], "
+        f"got {frame_index}."
+      )
+  else:
+    body_heights = body_pos_w[:, body_index, 2]
+    frame_index = int(np.argmin(np.abs(body_heights - opening_center_z)))
+
+  center = (
+    float(body_pos_w[frame_index, body_index, 0]) + cfg.play_window_offset_x,
+    float(body_pos_w[frame_index, body_index, 1]) + cfg.play_window_offset_y,
+    float(opening_center_z) + cfg.play_window_offset_z,
+  )
+  return center, align_body_name, frame_index
+
+
+def _inject_play_window_entity(
+  *,
+  env_cfg,
+  cfg: PlayConfig,
+  motion_file: str | None,
+  default_align_body_name: str | None,
+) -> None:
+  center, align_body_name, frame_index = _resolve_play_window_center(
+    cfg=cfg,
+    env_cfg=env_cfg,
+    motion_file=motion_file,
+    default_align_body_name=default_align_body_name,
+  )
+  opening_center_z = center[2]
+  print(
+    "[INFO]: Play window enabled: "
+    f"opening={cfg.play_window_opening_width:.2f} x {cfg.play_window_opening_height:.2f} m, "
+    f"thickness={cfg.play_window_thickness:.2f} m, "
+    f"sill={cfg.play_window_sill_height:.2f} m, "
+    f"center=({center[0]:.3f}, {center[1]:.3f}, {opening_center_z:.3f})"
+  )
+  if frame_index is not None:
+    print(
+      "[INFO]: Play window auto placement: "
+      f"aligned to body {align_body_name!r} at motion frame {frame_index}."
+    )
+  else:
+    print("[INFO]: Play window placement: using manual center coordinates.")
+
+  env_cfg.scene.entities = dict(env_cfg.scene.entities)
+  env_cfg.scene.entities["play_window"] = EntityCfg(
+    spec_fn=lambda: _make_play_window_spec(
+      center=center,
+      opening_width=cfg.play_window_opening_width,
+      opening_height=cfg.play_window_opening_height,
+      thickness=cfg.play_window_thickness,
+      sill_height=cfg.play_window_sill_height,
+      outer_width=cfg.play_window_outer_width,
+      outer_height=cfg.play_window_outer_height,
+    )
+  )
 
 
 def run_play(task_id: str, cfg: PlayConfig):
@@ -115,6 +325,22 @@ def run_play(task_id: str, cfg: PlayConfig):
           if art is None:
             raise RuntimeError("No motion artifact found in the run.")
           motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
+
+  resolved_motion_file = None
+  default_align_body_name = None
+  if is_tracking_task:
+    motion_cmd = env_cfg.commands["motion"]
+    assert isinstance(motion_cmd, MotionCommandCfg)
+    resolved_motion_file = motion_cmd.motion_file or None
+    default_align_body_name = motion_cmd.anchor_body_name
+
+  if cfg.play_window:
+    _inject_play_window_entity(
+      env_cfg=env_cfg,
+      cfg=cfg,
+      motion_file=resolved_motion_file,
+      default_align_body_name=default_align_body_name,
+    )
 
   log_dir: Path | None = None
   resume_path: Path | None = None
