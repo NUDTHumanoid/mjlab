@@ -40,11 +40,14 @@ mjlab combines [Isaac Lab](https://github.com/isaac-sim/IsaacLab)'s manager-base
     - [Command Examples](#command-examples)
     - [Current Scope](#current-scope)
   - [Hardware Deployment (BeyondMimic / Unitree G1)](#hardware-deployment-beyondmimic--unitree-g1)
-    - [1. Connect to the onboard computer](#1-connect-to-the-onboard-computer)
-    - [2. Power on and enter debug mode](#2-power-on-and-enter-debug-mode)
-    - [3. Load the policy](#3-load-the-policy)
-    - [4. Run, stop, and emergency stop](#4-run-stop-and-emergency-stop)
-    - [5. Shutdown](#5-shutdown)
+    - [0. One-time setup (first use only)](#0-one-time-setup-first-use-only)
+    - [1. Power on](#1-power-on)
+    - [2. Connect to the onboard computer](#2-connect-to-the-onboard-computer)
+    - [3. Enter debug mode](#3-enter-debug-mode)
+    - [4. Start the container and load the policy](#4-start-the-container-and-load-the-policy)
+    - [5. Run, stop, and emergency stop](#5-run-stop-and-emergency-stop)
+    - [6. Shutdown](#6-shutdown)
+    - [Controller Shortcut Reference](#controller-shortcut-reference)
   - [Documentation](#documentation)
   - [Development](#development)
   - [Citation](#citation)
@@ -733,46 +736,78 @@ uv run train Mjlab-Tracking-Rough-Unitree-G1-New \
 
 ## Hardware Deployment (BeyondMimic / Unitree G1)
 
-This section condenses the practical real-robot deployment steps from the local BeyondMimic notes into a README-friendly checklist.
+This section turns the local BeyondMimic real-robot notes into a README-friendly checklist for deploying an `.onnx` policy on a Unitree G1.
 
-### 1. Connect to the onboard computer
+| Item | Value |
+| --- | --- |
+| Onboard computer IP | `192.168.123.164` |
+| Username | `unitree` |
+| Password | `123` |
+| Container name | `beyondmimic_ctrl` |
+| Image name | `beyongdmimic_armkongzhidiceng:v0` |
+| Policy path inside container | `/root/colcon_ws/policy.onnx` |
+| ROS network interface | `eth0` |
 
-Default access from the current deployment notes:
+### 0. One-time setup (first use only)
 
-- Username: `unitree`
-- Password: `123`
-- Onboard computer IP: `192.168.123.164`
+If the onboard computer is already prepared, skip to Step 1.
 
-Connection options:
+Import the deployment image and create the container:
 
-- External monitor and keyboard directly attached to the robot's onboard computer
-- NoMachine remote desktop
-- `ssh unitree@192.168.123.164` from a terminal or VS Code Remote SSH
+```bash
+docker load -i qyk_beyondmimic_diceng.tar
+docker images
 
-SSH + `tmux` is the most robust workflow because your remote session keeps running even if the local network drops:
+docker run -itd \
+  -e DISPLAY=$DISPLAY \
+  --name beyondmimic_ctrl \
+  --net=host \
+  --privileged \
+  beyongdmimic_armkongzhidiceng:v0
+```
+
+After the container exists, later deployments only need `docker start beyondmimic_ctrl`.
+
+Set up `tmux` once so the deployment session survives SSH disconnects:
+
+```bash
+sudo apt install tmux
+touch ~/.tmux.conf
+grep -qxF 'set -g mouse on' ~/.tmux.conf || echo 'set -g mouse on' >> ~/.tmux.conf
+tmux source-file ~/.tmux.conf
+```
+
+Run the `grep ... || echo ...` line only if mouse support has not already been configured.
+
+### 1. Power on
+
+1. Press then long-press the power button on the robot's left waist.
+2. Press then long-press the power button on the underside of the controller. It should pair automatically with the robot.
+
+> **Safety note:** Make sure the robot is in a safe standing or supported posture before power-on.
+
+### 2. Connect to the onboard computer
+
+This deployment flow uses SSH throughout and does not require a dock. Before setup, and again before shutdown, plug the Ethernet cable into the onboard computer so you can log in remotely.
+
+SSH + `tmux` is the recommended workflow because your remote session keeps running even if the local network drops:
 
 ```bash
 ssh unitree@192.168.123.164
-sudo apt install tmux
-nano ~/.tmux.conf
+# password: 123
+tmux new -s deploy
 ```
 
-Add the following to `~/.tmux.conf`:
+VS Code users can install the `Remote - SSH` extension for full file management and terminal access on the onboard computer.
+
+Useful `tmux` commands:
 
 ```bash
-set -g mouse on
-```
-
-Then reload and use tmux:
-
-```bash
-tmux source-file ~/.tmux.conf
-tmux new -s my_work
 tmux ls
-tmux attach -t my_work
+tmux attach -t deploy
 ```
 
-Useful tmux shortcuts:
+Useful `tmux` shortcuts:
 
 - `Ctrl+B`, then `%`: split left/right
 - `Ctrl+B`, then `"`: split top/bottom
@@ -783,57 +818,86 @@ Useful tmux shortcuts:
 
 Reference: [Unitree G1 developer guide](https://support.unitree.com/home/zh/G1_developer/about_G1)
 
-### 2. Power on and enter debug mode
+### 3. Enter debug mode
 
-1. Press then long-press the power button on the robot's left waist to power on the robot.
-2. Press then long-press the power button on the underside of the controller to power on the controller. It should pair automatically with the robot.
-3. After boot, the robot enters zero-torque mode.
-4. Press `L2+R2` to enter debug mode.
-5. Press `L2+A` to trigger the diagnostic pose, where G1 raises its arms.
-6. Press `L2+B` to enter damping mode, where G1 lowers its arms.
+After boot, G1 starts in zero-torque mode. Use the controller to enter debug mode and verify the robot state:
 
-### 3. Load the policy
+- Press `L2 + R2` to enter debug mode
+- Press `L2 + A` to trigger the diagnostic pose and confirm joint response
+- Press `L2 + B` to switch to damping mode before loading the policy
 
-Recommended path: open the deployment container from VS Code, copy the `.onnx` policy into `/root/colcon_ws/`, then launch:
+> **Recommended check:** Run the diagnostic pose once before policy deployment to confirm that the robot is responding normally.
 
-```bash
-source /opt/ros/humble/setup.bash
-cd /root/colcon_ws
-source install/setup.bash
-ros2 launch motion_tracking_controller real.launch.py \
-  network_interface:=eth0 \
-  policy_path:=policy_dance.onnx
-```
+### 4. Start the container and load the policy
 
-If VS Code is temporarily unavailable, use Docker directly:
+Start the deployment container on the onboard computer:
 
 ```bash
 docker ps -a
-docker start beyondmimic-dicengkongzhi
-docker ps
-docker cp /home/unitree/policy_dance.onnx beyondmimic-dicengkongzhi:/root/colcon_ws/policy_dance.onnx
-docker exec -it beyondmimic-dicengkongzhi bash
+docker start beyondmimic_ctrl
 ```
 
-After entering the container, run the same ROS 2 launch steps shown above.
+Copy the policy file into the container. Run this on the host terminal, not inside the container:
 
-### 4. Run, stop, and emergency stop
+```bash
+docker cp /home/unitree/policy.onnx \
+  beyondmimic_ctrl:/root/colcon_ws/policy.onnx
+```
 
-Once `ros2 launch` succeeds, G1 enters standby mode and you can disconnect the robot from the dock.
+If you are already attached to the deployment container from VS Code, copying the `.onnx` file directly into `/root/colcon_ws/` is equivalent.
 
-- Press `R1+A` to start the policy
-- Press `L1+A` to stop the policy and return to standby
+Enter the container, activate the ROS environment, and launch the controller:
+
+```bash
+docker exec -it beyondmimic_ctrl bash
+cd /root/colcon_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch motion_tracking_controller real.launch.py \
+  network_interface:=eth0 \
+  policy_path:=policy.onnx
+```
+
+Once `ros2 launch` succeeds, the terminal will keep printing logs and G1 will enter standby mode. If your demo runs without a wired connection, unplug the Ethernet cable at that point.
+
+### 5. Run, stop, and emergency stop
+
+Use the controller as follows:
+
+- Press `R1 + A` to start the policy
+- Press `L1 + A` to stop the policy and return to standby
 - Press `B` for emergency stop
 
-### 5. Shutdown
+> **Safety note:** Keep the controller in hand throughout the demo. The initial pose may not self-stabilize, so have an operator ready behind the robot if needed.
 
-1. Reconnect the robot to the dock after the demo.
-2. Press `Ctrl+C` in the deployment terminal to stop the program.
-3. Press `L2+R2` to re-enter debug mode.
-4. Press `L2+B` to return G1 to damping mode.
-5. After the robot is stable in damping mode, short-press then long-press the battery power button for a safe shutdown.
+### 6. Shutdown
 
-> **Note:** The credentials, IP address, container name, and policy file name above are copied from the current local deployment notes. If your robot or network setup differs, update these values before running the commands.
+1. If the policy is still running, press `L1 + A` to return G1 to standby.
+2. Plug the Ethernet cable back into the onboard computer after the demo.
+3. SSH back in and reattach the `tmux` session:
+
+```bash
+ssh unitree@192.168.123.164
+tmux attach -t deploy
+```
+
+4. Press `Ctrl+C` in the deployment terminal to stop the program and confirm the node has exited.
+5. Press `L2 + R2` to re-enter debug mode.
+6. Press `L2 + B` to return G1 to damping mode.
+7. After the robot is stable in damping mode, short-press then long-press the battery power button for a safe shutdown.
+
+### Controller Shortcut Reference
+
+| Buttons | When to use | Effect |
+| --- | --- | --- |
+| `L2 + R2` | After boot or before shutdown | Enter or re-enter debug mode |
+| `L2 + A` | In debug mode | Diagnostic pose, raises the arms |
+| `L2 + B` | In debug mode | Damping mode, lowers the arms |
+| `R1 + A` | In standby | Start the policy |
+| `L1 + A` | During execution | Stop the policy and return to standby |
+| `B` | Any time | Emergency stop |
+
+> **Note:** The credentials, IP address, image name, container name, and default policy path above are copied from the current local deployment notes. If your robot or network setup differs, update these values before running the commands.
 
 ---
 
