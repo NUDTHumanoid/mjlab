@@ -12,6 +12,11 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
+from mjlab.tasks.tracking.config.late_phase_dr import (
+  DEFAULT_STAND_UP_KICK_SCALE,
+  make_late_phase_tracking_play_disturbance_event,
+  scale_late_phase_tracking_disturbance_event,
+)
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
@@ -38,9 +43,34 @@ class PlayConfig:
   viewer: Literal["auto", "native", "viser"] = "auto"
   no_terminations: bool = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
+  simulate_late_phase_aggressive_dr: bool = False
+  """Inject late-phase recovery disturbances used by Late-Phase-DR-Finetune during play."""
+  late_phase_play_overshoot_scale: float = DEFAULT_STAND_UP_KICK_SCALE
+  """Scale the play-time stand-up overshoot disturbance strength."""
+  late_phase_play_underpowered_scale: float = DEFAULT_STAND_UP_KICK_SCALE
+  """Scale the play-time stand-up underpowered disturbance strength."""
+  late_phase_play_kick_duration_steps: int | None = None
+  """Optional override for the stand-up recovery angular-kick duration."""
 
   # Internal flag used by demo script.
   _demo_mode: tyro.conf.Suppress[bool] = False
+
+
+def _enable_tracking_late_phase_play_dr(
+  env_cfg,
+  *,
+  overshoot_scale: float = DEFAULT_STAND_UP_KICK_SCALE,
+  underpowered_scale: float = DEFAULT_STAND_UP_KICK_SCALE,
+  kick_duration_steps: int | None = None,
+) -> None:
+  event_cfg = make_late_phase_tracking_play_disturbance_event()
+  scale_late_phase_tracking_disturbance_event(
+    event_cfg,
+    overshoot_scale=overshoot_scale,
+    underpowered_scale=underpowered_scale,
+    kick_duration_steps=kick_duration_steps,
+  )
+  env_cfg.events["late_phase_play_disturbance"] = event_cfg
 
 
 def run_play(task_id: str, cfg: PlayConfig):
@@ -69,6 +99,27 @@ def run_play(task_id: str, cfg: PlayConfig):
     motion_cmd = env_cfg.commands["motion"]
     assert isinstance(motion_cmd, MotionCommandCfg)
     motion_cmd.sampling_mode = "uniform"
+
+  if cfg.simulate_late_phase_aggressive_dr:
+    if not is_tracking_task:
+      raise ValueError(
+        "`simulate_late_phase_aggressive_dr` is only supported for tracking tasks."
+      )
+    _enable_tracking_late_phase_play_dr(
+      env_cfg,
+      overshoot_scale=cfg.late_phase_play_overshoot_scale,
+      underpowered_scale=cfg.late_phase_play_underpowered_scale,
+      kick_duration_steps=cfg.late_phase_play_kick_duration_steps,
+    )
+    play_event_params = env_cfg.events["late_phase_play_disturbance"].params
+    print(
+      "[INFO]: Enabled aggressive late-phase play disturbance "
+      "(second half of the motion only). "
+      f"overshoot_scale={cfg.late_phase_play_overshoot_scale:.2f}, "
+      f"underpowered_scale={cfg.late_phase_play_underpowered_scale:.2f}, "
+      f"overshoot_frame={play_event_params['stand_up_overshoot_trigger_frame']}, "
+      f"underpowered_frame={play_event_params['stand_up_underpowered_trigger_frame']}."
+    )
 
   if is_tracking_task:
     motion_cmd = env_cfg.commands["motion"]

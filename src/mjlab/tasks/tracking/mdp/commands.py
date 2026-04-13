@@ -77,6 +77,14 @@ class MotionCommand(CommandTerm):
     self.motion = MotionLoader(
       self.cfg.motion_file, self.body_indexes, device=self.device
     )
+    self._sampling_step_start, self._sampling_step_end = (
+      self._resolve_sampling_step_range()
+    )
+    self._late_phase_sampling_step_range = self._resolve_optional_sampling_step_range(
+      self.cfg.late_phase_sampling_start_frame,
+      self.cfg.late_phase_sampling_end_frame,
+      label="late-phase sampling frame window",
+    )
     self.time_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
     self.body_pos_relative_w = torch.zeros(
       self.num_envs, len(cfg.body_names), 3, device=self.device
@@ -86,7 +94,8 @@ class MotionCommand(CommandTerm):
     )
     self.body_quat_relative_w[:, :, 0] = 1.0
 
-    self.bin_count = int(self.motion.time_step_total // (1 / env.step_dt)) + 1
+    sampling_window_size = self._sampling_step_end - self._sampling_step_start + 1
+    self.bin_count = int(sampling_window_size // (1 / env.step_dt)) + 1
     self.bin_failed_count = torch.zeros(
       self.bin_count, dtype=torch.float, device=self.device
     )
@@ -118,6 +127,82 @@ class MotionCommand(CommandTerm):
     # Ghost model created lazily on first visualization
     self._ghost_model: mujoco.MjModel | None = None
     self._ghost_color = np.array(cfg.viz.ghost_color, dtype=np.float32)
+
+  def _resolve_optional_sampling_step_range(
+    self,
+    start_frame: int | None,
+    end_frame: int | None,
+    *,
+    label: str,
+  ) -> tuple[int, int] | None:
+    if self.motion.time_step_total <= 0:
+      raise ValueError("Motion file must contain at least one frame.")
+
+    if start_frame is None and end_frame is None:
+      return None
+
+    start = 0 if start_frame is None else int(start_frame)
+    end = (
+      self.motion.time_step_total - 1
+      if end_frame is None
+      else int(end_frame)
+    )
+    if start > end:
+      raise ValueError(
+        f"{label} must satisfy start <= end, "
+        f"but got start={start_frame}, end={end_frame}."
+      )
+    if end < 0 or start >= self.motion.time_step_total:
+      raise ValueError(
+        f"{label} does not overlap the motion length "
+        f"({self.motion.time_step_total} frames): start={start_frame}, end={end_frame}."
+      )
+    return max(int(start), 0), min(int(end), self.motion.time_step_total - 1)
+
+  def _resolve_sampling_step_range(self) -> tuple[int, int]:
+    resolved = self._resolve_optional_sampling_step_range(
+      self.cfg.sampling_start_frame,
+      self.cfg.sampling_end_frame,
+      label="motion sampling frame window",
+    )
+    if resolved is None:
+      return 0, self.motion.time_step_total - 1
+    return resolved
+
+  def _time_steps_to_bin_indices(self, time_steps: torch.Tensor) -> torch.Tensor:
+    if self.bin_count <= 1:
+      return torch.zeros_like(time_steps)
+
+    sampling_window_size = self._sampling_step_end - self._sampling_step_start + 1
+    clamped_steps = torch.clamp(
+      time_steps, self._sampling_step_start, self._sampling_step_end
+    )
+    relative_steps = clamped_steps - self._sampling_step_start
+    return torch.clamp(
+      (relative_steps * self.bin_count) // sampling_window_size,
+      0,
+      self.bin_count - 1,
+    )
+
+  def _sample_uniform_time_steps_in_range(
+    self,
+    env_ids: torch.Tensor,
+    range_start: int,
+    range_end: int,
+  ) -> None:
+    self.time_steps[env_ids] = torch.randint(
+      range_start,
+      range_end + 1,
+      (len(env_ids),),
+      device=self.device,
+    )
+
+  def _set_uniform_sampling_metrics(self, env_ids: torch.Tensor) -> None:
+    if env_ids.numel() == 0:
+      return
+    self.metrics["sampling_entropy"][env_ids] = 1.0
+    self.metrics["sampling_top1_prob"][env_ids] = 1.0 / self.bin_count
+    self.metrics["sampling_top1_bin"][env_ids] = 0.5
 
   @property
   def command(self) -> torch.Tensor:
@@ -246,11 +331,7 @@ class MotionCommand(CommandTerm):
   def _adaptive_sampling(self, env_ids: torch.Tensor):
     episode_failed = self._env.termination_manager.terminated[env_ids]
     if torch.any(episode_failed):
-      current_bin_index = torch.clamp(
-        (self.time_steps * self.bin_count) // max(self.motion.time_step_total, 1),
-        0,
-        self.bin_count - 1,
-      )
+      current_bin_index = self._time_steps_to_bin_indices(self.time_steps)
       fail_bins = current_bin_index[env_ids][episode_failed]
       self._current_bin_failed[:] = torch.bincount(fail_bins, minlength=self.bin_count)
 
@@ -272,36 +353,61 @@ class MotionCommand(CommandTerm):
     sampled_bins = torch.multinomial(
       sampling_probabilities, len(env_ids), replacement=True
     )
+    sampling_window_size = self._sampling_step_end - self._sampling_step_start + 1
     self.time_steps[env_ids] = (
       (sampled_bins + sample_uniform(0.0, 1.0, (len(env_ids),), device=self.device))
       / self.bin_count
-      * (self.motion.time_step_total - 1)
+      * sampling_window_size
+      + self._sampling_step_start
     ).long()
+    self.time_steps[env_ids] = torch.clamp(
+      self.time_steps[env_ids], self._sampling_step_start, self._sampling_step_end
+    )
 
     # Update metrics.
     H = -(sampling_probabilities * (sampling_probabilities + 1e-12).log()).sum()
     H_norm = H / math.log(self.bin_count) if self.bin_count > 1 else 1.0
     pmax, imax = sampling_probabilities.max(dim=0)
-    self.metrics["sampling_entropy"][:] = H_norm
-    self.metrics["sampling_top1_prob"][:] = pmax
-    self.metrics["sampling_top1_bin"][:] = imax.float() / self.bin_count
+    self.metrics["sampling_entropy"][env_ids] = H_norm
+    self.metrics["sampling_top1_prob"][env_ids] = pmax
+    self.metrics["sampling_top1_bin"][env_ids] = imax.float() / self.bin_count
 
   def _uniform_sampling(self, env_ids: torch.Tensor):
-    self.time_steps[env_ids] = torch.randint(
-      0, self.motion.time_step_total, (len(env_ids),), device=self.device
+    self._sample_uniform_time_steps_in_range(
+      env_ids, self._sampling_step_start, self._sampling_step_end
     )
-    self.metrics["sampling_entropy"][:] = 1.0  # Maximum entropy for uniform.
-    self.metrics["sampling_top1_prob"][:] = 1.0 / self.bin_count
-    self.metrics["sampling_top1_bin"][:] = 0.5  # No specific bin preference.
+    self._set_uniform_sampling_metrics(env_ids)
 
   def _resample_command(self, env_ids: torch.Tensor):
-    if self.cfg.sampling_mode == "start":
-      self.time_steps[env_ids] = 0
-    elif self.cfg.sampling_mode == "uniform":
-      self._uniform_sampling(env_ids)
-    else:
-      assert self.cfg.sampling_mode == "adaptive"
-      self._adaptive_sampling(env_ids)
+    primary_env_ids = env_ids
+    late_phase_sampling_probability = min(
+      max(float(self.cfg.late_phase_sampling_probability), 0.0), 1.0
+    )
+    if (
+      primary_env_ids.numel() > 0
+      and late_phase_sampling_probability > 0.0
+      and self._late_phase_sampling_step_range is not None
+    ):
+      late_phase_mask = (
+        torch.rand(primary_env_ids.numel(), device=self.device)
+        < late_phase_sampling_probability
+      )
+      late_phase_env_ids = primary_env_ids[late_phase_mask]
+      primary_env_ids = primary_env_ids[~late_phase_mask]
+      if late_phase_env_ids.numel() > 0:
+        late_start, late_end = self._late_phase_sampling_step_range
+        self._sample_uniform_time_steps_in_range(late_phase_env_ids, late_start, late_end)
+        self._set_uniform_sampling_metrics(late_phase_env_ids)
+
+    if primary_env_ids.numel() > 0:
+      if self.cfg.sampling_mode == "start":
+        self.time_steps[primary_env_ids] = self._sampling_step_start
+        self._set_uniform_sampling_metrics(primary_env_ids)
+      elif self.cfg.sampling_mode == "uniform":
+        self._uniform_sampling(primary_env_ids)
+      else:
+        assert self.cfg.sampling_mode == "adaptive"
+        self._adaptive_sampling(primary_env_ids)
 
     root_pos = self.body_pos_w[:, 0].clone()
     root_ori = self.body_quat_w[:, 0].clone()
@@ -344,6 +450,12 @@ class MotionCommand(CommandTerm):
     soft_joint_pos_limits = self.robot.data.soft_joint_pos_limits[env_ids]
     joint_pos[env_ids] = torch.clip(
       joint_pos[env_ids], soft_joint_pos_limits[:, :, 0], soft_joint_pos_limits[:, :, 1]
+    )
+    joint_vel += sample_uniform(
+      lower=self.cfg.joint_velocity_range[0],
+      upper=self.cfg.joint_velocity_range[1],
+      size=joint_vel.shape,
+      device=joint_vel.device,  # type: ignore[arg-type]
     )
     self.robot.write_joint_state_to_sim(
       joint_pos[env_ids], joint_vel[env_ids], env_ids=env_ids
@@ -479,6 +591,12 @@ class MotionCommandCfg(CommandTermCfg):
   pose_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   velocity_range: dict[str, tuple[float, float]] = field(default_factory=dict)
   joint_position_range: tuple[float, float] = (-0.52, 0.52)
+  joint_velocity_range: tuple[float, float] = (0.0, 0.0)
+  sampling_start_frame: int | None = None
+  sampling_end_frame: int | None = None
+  late_phase_sampling_probability: float = 0.0
+  late_phase_sampling_start_frame: int | None = None
+  late_phase_sampling_end_frame: int | None = None
   adaptive_kernel_size: int = 1
   adaptive_lambda: float = 0.8
   adaptive_uniform_ratio: float = 0.1

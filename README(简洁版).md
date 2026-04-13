@@ -668,6 +668,7 @@ For the full change log and alignment rationale, see [G1_New_Alignment_Notes.md]
 | `Mjlab-Velocity-Flat-Unitree-G1` | `Mjlab-Velocity-Flat-Unitree-G1-New` |
 | `Mjlab-Velocity-Rough-Unitree-G1` | `Mjlab-Velocity-Rough-Unitree-G1-New` |
 | `Mjlab-Tracking-Flat-Unitree-G1` | `Mjlab-Tracking-Flat-Unitree-G1-New` |
+| `Mjlab-Tracking-Flat-Unitree-G1-Late-Phase-DR-Finetune` | `Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune` |
 | `Mjlab-Tracking-Rough-Unitree-G1` | `Mjlab-Tracking-Rough-Unitree-G1-New` |
 | `Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation` | `Mjlab-Tracking-Flat-Unitree-G1-New-No-State-Estimation` |
 
@@ -687,6 +688,25 @@ uv run train Mjlab-Tracking-Flat-Unitree-G1-New \
   --env.commands.motion.motion-file /path/to/motion.npz \
   --env.scene.num-envs 4096
 ```
+
+**Late-phase DR finetuning from an existing checkpoint:**
+
+```bash
+uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/model.pt \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --env.scene.num-envs 4096
+```
+
+This finetune variant keeps full-motion adaptive sampling, then starts a mild
+late-phase disturbance slightly before the motion midpoint and ramps it up
+through landing / rolling / stand-up. Around frame `150`, it also adds a
+directional one-shot push aimed at the stand-up phase. It is intended as a
+stage-2 curriculum for recovery robustness, while avoiding the clean front-half
+forgetting seen in the removed `Landing-Finetune` and `Recovery-Mixed`
+experiments. See
+[Tracking_Late_Phase_DR_Finetune.md](Tracking_Late_Phase_DR_Finetune.md) for the
+full design rationale.
 
 **Replay a motion with the new robot variant:**
 
@@ -714,6 +734,22 @@ uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
   --motion-file /path/to/motion.npz
 ```
 
+**Play a full motion with aggressive late-phase disturbance simulation:**
+
+```bash
+uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz \
+  --simulate-late-phase-aggressive-dr True \
+  --no-terminations True
+```
+
+This keeps the motion starting from frame `0`, and in `play` it uses a cleaner
+diagnostic profile focused on a pelvis velocity kick around frame `150`,
+instead of stacking all the generic late-phase perturbations.
+Remove `--no-terminations True` if you want strict pass/fail playback instead of
+full-rollout inspection.
+
 **Rough-terrain tracking:**
 
 ```bash
@@ -727,6 +763,8 @@ uv run train Mjlab-Tracking-Rough-Unitree-G1-New \
 
 - For most CLI workflows, you can migrate by replacing `Unitree-G1` with `Unitree-G1-New` in the task ID.
 - `train`, `play`, and `replay-motion` already work with the `*-G1-New` task IDs shown above.
+- A dedicated late-phase disturbance finetune task is available as `Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune`.
+- The older `Landing-Finetune` and `Recovery-Mixed` experimental tasks have been removed because they were not robust enough and tended to hurt clean full-motion tracking.
 - `csv_to_npz.py` now supports `--robot-variant g1_new`. Because `G1-New` keeps the same 29-DoF joint tree and joint names, this was never a structural blocker, but you can now keep preprocessing aligned as well.
 - If you maintain Python scripts that import configs directly, switch `...tracking.config.g1...` to `...tracking.config.g1_new...`, `...velocity.config.g1...` to `...velocity.config.g1_new...`, and `g1_constants.py` to `g1_constants_new.py`.
 - `g1_new.xml` matches the latest `mode_15` torso / wrist mesh and inertial changes, but it still keeps the original MuJoCo-specific collision simplifications for training stability.

@@ -547,6 +547,54 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1 \
 
 Use `--no-terminations True` when you want to inspect the full motion even if the policy would otherwise fall early, and add `--video True --video-length 500` to record a rollout.
 
+For a full-motion play test with aggressive disturbances that begin slightly
+before the second half and ramp up through the recovery phase,
+add the late-phase simulation flag:
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz \
+  --simulate-late-phase-aggressive-dr True \
+  --no-terminations True
+```
+
+This keeps the rollout starting from the first frame, then applies a cleaner
+play-time disturbance profile focused on a targeted pelvis velocity kick around
+frame `150`.
+Remove `--no-terminations True` if you want strict evaluation.
+
+#### Late-phase DR finetuning from an existing checkpoint
+
+When a policy can already complete the motion in clean simulation but still
+fails during the late landing / rolling / stand-up segment once errors start to
+accumulate, use the dedicated late-phase disturbance finetune task:
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/model.pt \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --env.scene.num-envs 4096
+```
+
+This task keeps the same network shape so checkpoint resume stays simple, while
+changing the curriculum in a more conservative way than the removed experimental
+landing-only and mixed-reset tasks:
+
+- full-motion sampling is preserved with `sampling_mode="adaptive"` instead of
+  forcing resets into a narrow late-motion window
+- a late-phase disturbance event starts slightly before the motion midpoint and
+  ramps up through the recovery phase
+- the generic disturbance is kept milder, while a dedicated directional push is
+  added around the stand-up window near frame `150`
+- the disturbance applies root pose/velocity offsets, joint-state offsets, and
+  torso / pelvis impulses to stress the recovery phase
+- recovery terminations are relaxed so the policy has time to regain balance
+
+This is intended as a stage-2 curriculum on top of a clean full-motion tracking
+checkpoint. The design notes and reference commands are documented in
+`Tracking_Late_Phase_DR_Finetune.md`.
+
 #### Jump-up / jump-forward tuning on flat tracking
 
 For jump-like motions such as `jump_up` and `jump_forward`, the flat tracking task uses a slightly less conservative reward shaping than the original defaults:

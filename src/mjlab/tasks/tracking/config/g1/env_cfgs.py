@@ -14,6 +14,10 @@ from mjlab.managers.observation_manager import ObservationGroupCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking import mdp
+from mjlab.tasks.tracking.config.late_phase_dr import (
+  LATE_PHASE_DR_TERMINATION_THRESHOLDS,
+  make_late_phase_tracking_disturbance_event,
+)
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.tasks.tracking.tracking_env_cfg import make_tracking_env_cfg
 from mjlab.terrains import TerrainEntityCfg
@@ -168,6 +172,36 @@ def _apply_tracking_play_overrides(
   motion_cmd.pose_range = {}
   motion_cmd.velocity_range = {}
   motion_cmd.sampling_mode = "start"
+
+
+def _apply_tracking_late_phase_dr_finetune_overrides(
+  cfg: ManagerBasedRlEnvCfg,
+  motion_cmd: MotionCommandCfg,
+  *,
+  play: bool,
+) -> None:
+  """Keep full-motion sampling and add aggressive disturbance in the late phase only."""
+  if play:
+    _apply_tracking_play_overrides(cfg, motion_cmd)
+    return
+
+  motion_cmd.sampling_start_frame = None
+  motion_cmd.sampling_end_frame = None
+  motion_cmd.late_phase_sampling_probability = 0.0
+  motion_cmd.late_phase_sampling_start_frame = None
+  motion_cmd.late_phase_sampling_end_frame = None
+  motion_cmd.sampling_mode = "adaptive"
+
+  cfg.terminations["anchor_pos"].params["threshold"] = (
+    LATE_PHASE_DR_TERMINATION_THRESHOLDS["anchor_pos"]
+  )
+  cfg.terminations["anchor_ori"].params["threshold"] = (
+    LATE_PHASE_DR_TERMINATION_THRESHOLDS["anchor_ori"]
+  )
+  cfg.terminations["ee_body_pos"].params["threshold"] = (
+    LATE_PHASE_DR_TERMINATION_THRESHOLDS["ee_body_pos"]
+  )
+  cfg.events["late_phase_dr_disturbance"] = make_late_phase_tracking_disturbance_event()
 
 
 def _apply_randomized_terrain_play_overrides(
@@ -346,6 +380,17 @@ def unitree_g1_flat_tracking_env_cfg(
   if play:
     _apply_tracking_play_overrides(cfg, motion_cmd)
 
+  return cfg
+
+
+def unitree_g1_flat_late_phase_dr_finetune_env_cfg(
+  has_state_estimation: bool = True,
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create a full-motion finetuning task with aggressive late-phase disturbances."""
+  cfg = make_tracking_env_cfg()
+  motion_cmd = _configure_g1_tracking_cfg(cfg, has_state_estimation)
+  _apply_tracking_late_phase_dr_finetune_overrides(cfg, motion_cmd, play=play)
   return cfg
 
 

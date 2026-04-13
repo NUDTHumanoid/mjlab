@@ -13,6 +13,10 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.rl import MjlabOnPolicyRunner, RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
+from mjlab.tasks.tracking.config.late_phase_dr import (
+  DEFAULT_STAND_UP_KICK_SCALE,
+  scale_late_phase_tracking_disturbance_event,
+)
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.gpu import select_gpus
 from mjlab.utils.os import dump_yaml, get_checkpoint_path, get_wandb_checkpoint_path
@@ -27,6 +31,8 @@ class TrainConfig:
   agent: RslRlBaseRunnerCfg
   registry_name: str | None = None
   checkpoint_file: str | None = None
+  late_phase_train_overshoot_scale: float | None = None
+  late_phase_train_underpowered_scale: float | None = None
   video: bool = False
   video_length: int = 200
   video_interval: int = 2000
@@ -42,6 +48,25 @@ class TrainConfig:
     env_cfg = load_env_cfg(task_id)
     agent_cfg = load_rl_cfg(task_id)
     return TrainConfig(env=env_cfg, agent=agent_cfg)
+
+
+def _enable_tracking_late_phase_train_dr(
+  env_cfg: ManagerBasedRlEnvCfg,
+  *,
+  overshoot_scale: float = DEFAULT_STAND_UP_KICK_SCALE,
+  underpowered_scale: float = DEFAULT_STAND_UP_KICK_SCALE,
+) -> None:
+  event_cfg = env_cfg.events.get("late_phase_dr_disturbance")
+  if event_cfg is None:
+    raise ValueError(
+      "`late_phase_train_overshoot_scale`/`late_phase_train_underpowered_scale` "
+      "are only supported for tasks that define `late_phase_dr_disturbance`."
+    )
+  scale_late_phase_tracking_disturbance_event(
+    event_cfg,
+    overshoot_scale=overshoot_scale,
+    underpowered_scale=underpowered_scale,
+  )
 
 
 def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
@@ -96,6 +121,31 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
         "  --registry-name your-org/motions/motion-name (download from WandB)\n"
         "  --env.commands.motion.motion-file /path/to/motion.npz (local file)"
       )
+
+  if (
+    cfg.late_phase_train_overshoot_scale is not None
+    or cfg.late_phase_train_underpowered_scale is not None
+  ):
+    overshoot_scale = (
+      cfg.late_phase_train_overshoot_scale
+      if cfg.late_phase_train_overshoot_scale is not None
+      else DEFAULT_STAND_UP_KICK_SCALE
+    )
+    underpowered_scale = (
+      cfg.late_phase_train_underpowered_scale
+      if cfg.late_phase_train_underpowered_scale is not None
+      else DEFAULT_STAND_UP_KICK_SCALE
+    )
+    _enable_tracking_late_phase_train_dr(
+      cfg.env,
+      overshoot_scale=overshoot_scale,
+      underpowered_scale=underpowered_scale,
+    )
+    print(
+      "[INFO] Enabled late-phase train disturbance scaling "
+      f"overshoot_scale={overshoot_scale:.2f}, "
+      f"underpowered_scale={underpowered_scale:.2f}"
+    )
 
   # Enable NaN guard if requested.
   if cfg.enable_nan_guard:
