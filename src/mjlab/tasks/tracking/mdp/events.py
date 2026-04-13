@@ -188,6 +188,7 @@ class late_phase_play_disturbance:
 
   _OVERSHOOT_MODE = 0
   _UNDERPOWERED_MODE = 1
+  _NO_RECOVERY_MODE = 2
 
   def __init__(self, cfg, env: ManagerBasedRlEnv):
     self._asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
@@ -905,6 +906,7 @@ class late_phase_play_disturbance:
     stand_up_push_duration_s: tuple[float, float],
     stand_up_push_body_cfg: SceneEntityCfg,
     stand_up_push_body_point_offset: tuple[float, float, float] | None,
+    stand_up_recovery_probability: float,
     stand_up_overshoot_trigger_frame: int,
     stand_up_overshoot_half_window: int,
     stand_up_overshoot_effort_scale_range: tuple[float, float],
@@ -979,17 +981,31 @@ class late_phase_play_disturbance:
     unset_mode_mask = self._stand_up_recovery_mode[eligible_env_ids] < 0
     unset_mode_ids = eligible_env_ids[unset_mode_mask]
     if unset_mode_ids.numel() > 0:
-      underpowered_mode = (
-        torch.rand(unset_mode_ids.numel(), device=self._device)
-        < min(max(float(stand_up_underpowered_probability), 0.0), 1.0)
+      recovery_probability = min(
+        max(float(stand_up_recovery_probability), 0.0), 1.0
+      )
+      recovery_active = (
+        torch.rand(unset_mode_ids.numel(), device=self._device) < recovery_probability
       )
       sampled_modes = torch.full(
         (unset_mode_ids.numel(),),
-        self._OVERSHOOT_MODE,
+        self._NO_RECOVERY_MODE,
         device=self._device,
         dtype=torch.long,
       )
-      sampled_modes[underpowered_mode] = self._UNDERPOWERED_MODE
+      active_mode_ids = unset_mode_ids[recovery_active]
+      if active_mode_ids.numel() > 0:
+        active_mode_positions = torch.nonzero(
+          recovery_active, as_tuple=False
+        ).squeeze(-1)
+        sampled_underpowered = (
+          torch.rand(active_mode_ids.numel(), device=self._device)
+          < min(max(float(stand_up_underpowered_probability), 0.0), 1.0)
+        )
+        sampled_modes[active_mode_positions] = self._OVERSHOOT_MODE
+        sampled_modes[
+          active_mode_positions[sampled_underpowered]
+        ] = self._UNDERPOWERED_MODE
       self._stand_up_recovery_mode[unset_mode_ids] = sampled_modes
 
       underpowered_center_frame = min(
@@ -1014,7 +1030,9 @@ class late_phase_play_disturbance:
         overshoot_center_frame + overshoot_half_window,
         motion_command.motion.time_step_total - 1,
       )
-      underpowered_ids = unset_mode_ids[underpowered_mode]
+      underpowered_ids = unset_mode_ids[
+        self._stand_up_recovery_mode[unset_mode_ids] == self._UNDERPOWERED_MODE
+      ]
       if underpowered_ids.numel() > 0:
         self._stand_up_underpowered_trigger_frame[underpowered_ids] = torch.randint(
           underpowered_lower_frame,
@@ -1022,7 +1040,9 @@ class late_phase_play_disturbance:
           (underpowered_ids.numel(),),
           device=self._device,
         )
-      overshoot_ids = unset_mode_ids[~underpowered_mode]
+      overshoot_ids = unset_mode_ids[
+        self._stand_up_recovery_mode[unset_mode_ids] == self._OVERSHOOT_MODE
+      ]
       if overshoot_ids.numel() > 0:
         self._stand_up_overshoot_trigger_frame[overshoot_ids] = torch.randint(
           overshoot_lower_frame,
@@ -1033,6 +1053,12 @@ class late_phase_play_disturbance:
         self._stand_up_underpowered_trigger_frame[overshoot_ids] = -1
       if underpowered_ids.numel() > 0:
         self._stand_up_overshoot_trigger_frame[underpowered_ids] = -1
+      no_recovery_ids = unset_mode_ids[
+        self._stand_up_recovery_mode[unset_mode_ids] == self._NO_RECOVERY_MODE
+      ]
+      if no_recovery_ids.numel() > 0:
+        self._stand_up_overshoot_trigger_frame[no_recovery_ids] = -1
+        self._stand_up_underpowered_trigger_frame[no_recovery_ids] = -1
 
     scales = self._progress_scales(
       env,

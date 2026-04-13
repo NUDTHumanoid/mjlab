@@ -14,6 +14,7 @@ LATE_PHASE_DR_TERMINATION_THRESHOLDS = {
   "anchor_ori": 1.2,
   "ee_body_pos": 0.35,
 }
+STAND_UP_RECOVERY_PROBABILITY = 0.4
 DEFAULT_STAND_UP_KICK_SCALE = 1.5
 _RAW_STAND_UP_PUSH_FORWARD_FORCE_RANGE = (0.0, 0.0)
 _RAW_STAND_UP_PUSH_LATERAL_FORCE_RANGE = (0.0, 0.0)
@@ -189,6 +190,7 @@ _LATE_PHASE_DR_EVENT_PARAMS = {
     body_names=("torso_link",),
   ),
   "stand_up_push_body_point_offset": (0.0, 0.0, 0.18),
+  "stand_up_recovery_probability": STAND_UP_RECOVERY_PROBABILITY,
   "stand_up_overshoot_trigger_frame": 165,
   "stand_up_overshoot_half_window": 2,
   "stand_up_overshoot_effort_scale_range": _STAND_UP_OVERSHOOT_EFFORT_SCALE_RANGE,
@@ -244,5 +246,6 @@ def make_late_phase_tracking_play_disturbance_event() -> EventTermCfg:
   params["joint_velocity_range"] = (0.0, 0.0)
   params["force_range"] = (0.0, 0.0)
   params["torque_range"] = (0.0, 0.0)
+  params["stand_up_recovery_probability"] = 1.0
   params["log_stand_up_recovery_disturbance"] = True
   return _make_tracking_disturbance_event(params)

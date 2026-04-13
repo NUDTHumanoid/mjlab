@@ -201,6 +201,16 @@ def _apply_tracking_late_phase_dr_finetune_overrides(
   cfg.terminations["ee_body_pos"].params["threshold"] = (
     LATE_PHASE_DR_TERMINATION_THRESHOLDS["ee_body_pos"]
   )
+  cfg.rewards["motion_joint_pos"] = RewardTermCfg(
+    func=mdp.motion_joint_position_error_exp,
+    weight=0.25,
+    params={"command_name": "motion", "std": 0.5},
+  )
+  cfg.rewards["motion_joint_vel"] = RewardTermCfg(
+    func=mdp.motion_joint_velocity_error_exp,
+    weight=0.1,
+    params={"command_name": "motion", "std": 2.5},
+  )
   cfg.events["late_phase_dr_disturbance"] = make_late_phase_tracking_disturbance_event()
 
 

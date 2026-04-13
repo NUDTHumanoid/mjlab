@@ -83,6 +83,15 @@
 - `late_phase_start_ratio = 0.42`
 - `late_phase_onset_scale = 0.35`
 - `late_phase_scale_power = 1.25`
+- `stand_up_recovery_probability = 0.4`
+
+这里的 `stand_up_recovery_probability` 很重要：
+
+- 训练时不是每个 episode 的后半段都一定被打
+- 默认只有 40% 的 episode 会触发一次恢复型扰动
+- 剩下 60% 的 episode 仍然保持 clean late-phase
+
+这样可以显著降低“策略默认预判后半段一定会出事”的过拟合趋势。
 
 ### 3. 两类恢复失败建模
 
@@ -157,6 +166,29 @@
 - root/pelvis 的短时 pitch 角速度误差
 - 下肢执行强弱偏差
 
+### 5. 抑制单腿应激补偿
+
+为了减少“clean 轨迹里也出现左脚蹬腿、单腿补偿”这类现象，当前 `Late-Phase-DR-Finetune` 任务额外加入了轻量 joint-space tracking reward：
+
+- `motion_joint_pos`
+  - `weight = 0.25`
+  - `std = 0.5`
+- `motion_joint_vel`
+  - `weight = 0.1`
+  - `std = 2.5`
+
+它们不是主导项，但会提高“某一条腿单独发神经”这种策略的代价。
+
+### 6. 更保守的 PPO finetune
+
+为了避免强扰动二次训练把原始 nominal 轨迹写坏，当前 late-phase finetune 的 PPO 也做了进一步收紧：
+
+- `learning_rate = 1e-4`
+- `entropy_coef = 0.001`
+- `desired_kl = 0.003`
+
+相比之前，这一版更强调“在原 checkpoint 附近做小步微调”，而不是快速重写策略。
+
 ## Train / Play 参数一一对应
 
 这版已经把 `train` 和 `play` 接到了同一个缩放 helper：
@@ -219,7 +251,26 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Fine
   --agent.run-name tiger_jump_late_phase_dr_ft
 ```
 
-### 2. 按当前人工标定的强度训练
+### 2. 推荐的稳健训练起点
+
+当前更推荐把训练强度设得明显低于最终 stress test 评测强度，例如：
+
+- `overshoot scale = 3.0`
+- `underpowered scale = 1.5`
+
+对应训练命令：
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /home/dp/czy/mjlab/logs/rsl_rl/g1_tracking/2026-04-10_11-12-04/model_53000.pt \
+  --env.commands.motion.motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --late-phase-train-overshoot-scale 3.0 \
+  --late-phase-train-underpowered-scale 1.5 \
+  --env.scene.num-envs 4096 \
+  --agent.run-name tiger_jump_late_phase_dr_os3_up1p5_ft
+```
+
+### 3. 按较强恢复分布训练
 
 如果你当前观察下来觉得下面这组比较符合：
 
@@ -261,6 +312,13 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
   --no-terminations True \
   --num-envs 1
 ```
+
+注意：
+
+- 训练端默认 `stand_up_recovery_probability = 0.4`
+- `play` 端在打开 `--simulate-late-phase-aggressive-dr True` 后，默认会把 `stand_up_recovery_probability` 固定成 `1.0`
+
+也就是说，训练时是“部分 episode 触发”，评测时是“打开后就稳定触发”，这样更方便做压力测试。
 
 如果只想看 clean 成功率，不想看被打断后的恢复过程，可以去掉：
 

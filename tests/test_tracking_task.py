@@ -7,7 +7,7 @@ from mjlab.asset_zoo.robots.unitree_g1.g1_constants_new import G1_NEW_ACTION_SCA
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.scripts.play import _enable_tracking_late_phase_play_dr
 from mjlab.scripts.train import _enable_tracking_late_phase_train_dr
-from mjlab.tasks.registry import list_tasks, load_env_cfg
+from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 from mjlab.tasks.tracking.config.late_phase_dr import LATE_PHASE_DR_START_RATIO
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 
@@ -163,6 +163,7 @@ def test_late_phase_dr_finetune_task_keeps_full_motion_sampling_and_adds_late_di
   assert cfg.events["late_phase_dr_disturbance"].params["stand_up_push_center_frame"] == 150
   assert cfg.events["late_phase_dr_disturbance"].params["stand_up_push_half_window"] == 4
   assert cfg.events["late_phase_dr_disturbance"].params["stand_up_push_post_trigger_frame"] == 165
+  assert cfg.events["late_phase_dr_disturbance"].params["stand_up_recovery_probability"] == 0.4
   assert cfg.events["late_phase_dr_disturbance"].params["stand_up_push_forward_force_range"] == (
     0.0,
     0.0,
@@ -213,6 +214,10 @@ def test_late_phase_dr_finetune_task_keeps_full_motion_sampling_and_adds_late_di
     0.0,
     0.0,
   )
+  assert cfg.rewards["motion_joint_pos"].weight == 0.25
+  assert cfg.rewards["motion_joint_pos"].params["std"] == 0.5
+  assert cfg.rewards["motion_joint_vel"].weight == 0.1
+  assert cfg.rewards["motion_joint_vel"].params["std"] == 2.5
   assert cfg.events["base_com"].params["ranges"] == base_cfg.events["base_com"].params["ranges"]
   assert cfg.events["encoder_bias"].params["bias_range"] == (
     base_cfg.events["encoder_bias"].params["bias_range"]
@@ -246,6 +251,7 @@ def test_play_can_inject_late_phase_aggressive_dr_into_full_motion_task() -> Non
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_push_post_trigger_frame"] == 165
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_overshoot_trigger_frame"] == 165
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_overshoot_half_window"] == 2
+  assert cfg.events["late_phase_play_disturbance"].params["stand_up_recovery_probability"] == 1.0
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_underpowered_probability"] == 0.5
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_underpowered_trigger_frame"] == 135
   assert cfg.events["late_phase_play_disturbance"].params["stand_up_underpowered_half_window"] == 2
@@ -351,6 +357,14 @@ def test_train_and_play_late_phase_scales_match() -> None:
     "stand_up_underpowered_pitch_ang_vel_range",
   ):
     assert train_params[key] == play_params[key]
+
+
+def test_late_phase_dr_finetune_runner_is_more_conservative() -> None:
+  """Late-phase finetune PPO config should be tighter than the base tracking config."""
+  cfg = load_rl_cfg("Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune")
+  assert cfg.algorithm.learning_rate == 1.0e-4
+  assert cfg.algorithm.entropy_coef == 0.001
+  assert cfg.algorithm.desired_kl == 0.003
 
 
 def test_late_phase_dr_finetune_play_keeps_full_motion_without_extra_disturbance() -> None:

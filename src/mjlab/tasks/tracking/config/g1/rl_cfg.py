@@ -63,9 +63,9 @@ def unitree_g1_tracking_late_phase_dr_finetune_ppo_runner_cfg() -> RslRlOnPolicy
   cfg = _unitree_g1_tracking_ppo_runner_cfg(
     experiment_name="g1_tracking_late_phase_dr_finetune"
   )
-  cfg.algorithm.learning_rate = 2.5e-4
-  cfg.algorithm.entropy_coef = 0.0015
-  cfg.algorithm.desired_kl = 0.006
+  cfg.algorithm.learning_rate = 1.0e-4
+  cfg.algorithm.entropy_coef = 0.001
+  cfg.algorithm.desired_kl = 0.003
   cfg.save_interval = 250
   cfg.max_iterations = 20_000
   return cfg
