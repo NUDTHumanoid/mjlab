@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,7 +15,6 @@ import numpy as np
 import tyro
 
 import mjlab
-
 
 _REQUIRED_RAW_KEYS = ("trans", "poses", "betas", "mocap_framerate")
 _SMPL_ASSET = Path("data/assets/mjcf/smpl_humanoid.xml")
@@ -119,8 +119,13 @@ def _validate_protomotions_root(protomotions_root: Path) -> tuple[Path, Path, Pa
 
 
 def _run_proto_step(command: list[str], *, cwd: Path) -> None:
+  env = os.environ.copy()
+  existing_pythonpath = env.get("PYTHONPATH")
+  env["PYTHONPATH"] = (
+    f"{cwd}:{existing_pythonpath}" if existing_pythonpath else str(cwd)
+  )
   try:
-    subprocess.run(command, cwd=str(cwd), check=True)
+    subprocess.run(command, cwd=str(cwd), check=True, env=env)
   except subprocess.CalledProcessError as exc:  # pragma: no cover - subprocess failure path
     raise RuntimeError(
       f"ProtoMotions step failed with exit code {exc.returncode}: {' '.join(command)}"

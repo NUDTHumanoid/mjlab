@@ -121,3 +121,34 @@ def unitree_g1_flat_crouch_to_lie_down_env_cfg(
     cfg.sim.nconmax = 55
 
   return cfg
+
+
+def unitree_g1_flat_acrobatics_env_cfg(
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create a G1 tracking config specialized for high-dynamic acrobatic motions."""
+  cfg = unitree_g1_flat_tracking_env_cfg(play=play)
+
+  motion_cmd = cfg.commands["motion"]
+  assert isinstance(motion_cmd, MotionCommandCfg)
+
+  motion_cmd.sampling_mode = "start"
+  motion_cmd.pose_range = {}
+  motion_cmd.velocity_range = {}
+  motion_cmd.joint_position_range = (0.0, 0.0)
+
+  cfg.events.pop("push_robot", None)
+
+  cfg.terminations["anchor_pos"].params["threshold"] = 0.6
+  cfg.terminations["anchor_ori"].params["threshold"] = 1.2
+  cfg.terminations.pop("ee_body_pos", None)
+
+  cfg.rewards["action_rate_l2"].weight = -0.02
+  cfg.rewards["joint_limit"].weight = -2.0
+  cfg.rewards["self_collisions"].weight = -2.0
+
+  if not play:
+    cfg.episode_length_s = 15.0
+    cfg.sim.nconmax = 80
+
+  return cfg

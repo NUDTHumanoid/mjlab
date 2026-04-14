@@ -14,7 +14,11 @@ artifacts/
 render_robots.py
 benchmark_results/
 .worktrees/
+.codex/
+.external/
+=0.6.1
 
 # Documentation outputs.
 **/_build/*
 **/generated/*
+.omx/

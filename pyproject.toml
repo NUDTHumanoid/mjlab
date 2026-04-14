@@ -65,6 +65,9 @@ export-scene = "mjlab.scripts.export_scene:main"
 debug-robot = "mjlab.scripts.debug_robot:main"
 raw-human-npz-to-keypoints = "mjlab.scripts.raw_human_npz_to_smpl_keypoints:main"
 pyroki-npz-to-csv = "mjlab.scripts.pyroki_npz_to_csv:main"
+smpl-keypoints-to-g1-npz = "mjlab.scripts.smpl_keypoints_to_g1_npz:main"
+build-tracking-motion = "mjlab.scripts.build_tracking_motion:main"
+report-and-preview-motion = "mjlab.scripts.report_and_preview_motion:cli"
 
 [dependency-groups]
 dev = [

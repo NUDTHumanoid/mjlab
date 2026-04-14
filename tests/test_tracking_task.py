@@ -286,3 +286,43 @@ def test_crouch_to_lie_down_rl_cfg_differs_from_baseline() -> None:
     f"Task {task_id} max_iterations={cfg.max_iterations} "
     f"is not shorter than baseline {baseline_cfg.max_iterations}"
   )
+
+
+def test_acrobatics_task_is_registered() -> None:
+  """The acrobatics tracking task should be registered."""
+  task_id = "Mjlab-Tracking-Flat-Unitree-G1-Acrobatics"
+
+  assert task_id in list_tasks(), f"Task {task_id} is not registered"
+
+
+def test_acrobatics_training_cfg_is_relaxed_for_flips() -> None:
+  """Acrobatics training should remove disturbances and relax strict terminations."""
+  task_id = "Mjlab-Tracking-Flat-Unitree-G1-Acrobatics"
+  cfg = load_env_cfg(task_id)
+
+  motion_cmd = cfg.commands["motion"]
+  assert isinstance(motion_cmd, MotionCommandCfg)
+  assert motion_cmd.sampling_mode == "start"
+  assert motion_cmd.pose_range == {}
+  assert motion_cmd.velocity_range == {}
+  assert motion_cmd.joint_position_range == (0.0, 0.0)
+  assert cfg.episode_length_s == 15.0
+  assert cfg.sim.nconmax == 80
+  assert "push_robot" not in cfg.events
+  assert "base_com" in cfg.events
+  assert "encoder_bias" in cfg.events
+  assert "foot_friction" in cfg.events
+  assert "ee_body_pos" not in cfg.terminations
+  assert cfg.terminations["anchor_pos"].params["threshold"] == 0.6
+  assert cfg.terminations["anchor_ori"].params["threshold"] == 1.2
+
+
+def test_acrobatics_rl_cfg_targets_long_finetune() -> None:
+  """Acrobatics finetune should target the existing experiment root with longer training."""
+  task_id = "Mjlab-Tracking-Flat-Unitree-G1-Acrobatics"
+  cfg = load_rl_cfg(task_id)
+
+  assert cfg.experiment_name == "g1_tracking_handstand1"
+  assert cfg.max_iterations == 40_000
+  assert cfg.num_steps_per_env == 32
+  assert cfg.algorithm.learning_rate == 5.0e-4

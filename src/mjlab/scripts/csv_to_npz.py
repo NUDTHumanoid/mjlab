@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -188,6 +189,8 @@ def run_sim(
   input_fps,
   output_fps,
   output_name,
+  output_file,
+  skip_wandb,
   render,
   line_range,
   renderer: OffscreenRenderer | None = None,
@@ -305,38 +308,44 @@ def run_sim(
         ):
           log[k] = np.stack(log[k], axis=0)
 
-        print("Saving to /tmp/motion.npz...")
-        np.savez("/tmp/motion.npz", **log)
+        output_path = Path(output_file).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Saving to {output_path}...")
+        np.savez(output_path, **log)
 
-        print("Uploading to Weights & Biases...")
-        import wandb
+        if not skip_wandb:
+          print("Uploading to Weights & Biases...")
+          import wandb
 
-        COLLECTION = output_name
-        run = wandb.init(project="csv_to_npz", name=COLLECTION)
-        print(f"[INFO]: Logging motion to wandb: {COLLECTION}")
-        REGISTRY = "motions"
-        logged_artifact = run.log_artifact(
-          artifact_or_path="/tmp/motion.npz", name=COLLECTION, type=REGISTRY
-        )
-        run.link_artifact(
-          artifact=logged_artifact,
-          target_path=f"wandb-registry-{REGISTRY}/{COLLECTION}",
-        )
-        print(f"[INFO]: Motion saved to wandb registry: {REGISTRY}/{COLLECTION}")
+          collection = output_name
+          run = wandb.init(project="csv_to_npz", name=collection)
+          print(f"[INFO]: Logging motion to wandb: {collection}")
+          registry = "motions"
+          logged_artifact = run.log_artifact(
+            artifact_or_path=str(output_path), name=collection, type=registry
+          )
+          run.link_artifact(
+            artifact=logged_artifact,
+            target_path=f"wandb-registry-{registry}/{collection}",
+          )
+          print(f"[INFO]: Motion saved to wandb registry: {registry}/{collection}")
 
-        if render:
-          import mediapy as media
+          if render:
+            import mediapy as media
 
-          print("Creating video...")
-          media.write_video("./motion.mp4", frames, fps=output_fps)
+            print("Creating video...")
+            media.write_video("./motion.mp4", frames, fps=output_fps)
 
-          print("Logging video to wandb...")
-          wandb.log({"motion_video": wandb.Video("./motion.mp4", format="mp4")})
+            print("Logging video to wandb...")
+            wandb.log({"motion_video": wandb.Video("./motion.mp4", format="mp4")})
 
-        wandb.finish()
+          wandb.finish()
+
+        return output_path
 
 
-def main(
+def convert_csv_to_motion_npz(
+  *,
   input_file: str,
   output_name: str,
   input_fps: float = 30.0,
@@ -344,18 +353,10 @@ def main(
   device: str = "cuda:0",
   render: bool = False,
   line_range: tuple[int, int] | None = None,
-):
-  """Replay motion from CSV file and output to npz file.
-
-  Args:
-    input_file: Path to the input CSV file.
-    output_name: Path to the output npz file.
-    input_fps: Frame rate of the CSV file.
-    output_fps: Desired output frame rate.
-    device: Device to use.
-    render: Whether to render the simulation and save a video.
-    line_range: Range of lines to process from the CSV file.
-  """
+  output_file: str = "/tmp/motion.npz",
+  skip_wandb: bool = False,
+) -> Path:
+  """Replay motion from CSV and save a local motion npz artifact."""
   if device.startswith("cuda") and not torch.cuda.is_available():
     print("[WARNING]: CUDA is not available. Falling back to CPU. This may be slow.")
     device = "cpu"
@@ -388,7 +389,7 @@ def main(
     )
     renderer.initialize()
 
-  run_sim(
+  return run_sim(
     sim=sim,
     scene=scene,
     joint_names=[
@@ -426,9 +427,44 @@ def main(
     input_file=input_file,
     output_fps=output_fps,
     output_name=output_name,
+    output_file=output_file,
+    skip_wandb=skip_wandb,
     render=render,
     line_range=line_range,
     renderer=renderer,
+  )
+
+
+def main(
+  input_file: str,
+  output_name: str,
+  input_fps: float = 30.0,
+  output_fps: float = 50.0,
+  device: str = "cuda:0",
+  render: bool = False,
+  line_range: tuple[int, int] | None = None,
+):
+  """Replay motion from CSV file and output to npz file.
+
+  Args:
+    input_file: Path to the input CSV file.
+    output_name: Path to the output npz file.
+    input_fps: Frame rate of the CSV file.
+    output_fps: Desired output frame rate.
+    device: Device to use.
+    render: Whether to render the simulation and save a video.
+    line_range: Range of lines to process from the CSV file.
+  """
+  convert_csv_to_motion_npz(
+    input_fps=input_fps,
+    input_file=input_file,
+    output_fps=output_fps,
+    output_name=output_name,
+    output_file="/tmp/motion.npz",
+    skip_wandb=False,
+    device=device,
+    render=render,
+    line_range=line_range,
   )
 
 

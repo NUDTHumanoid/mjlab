@@ -53,3 +53,16 @@ def unitree_g1_crouch_to_lie_down_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   cfg.num_steps_per_env = 64
   cfg.max_iterations = 20_000
   return cfg
+
+
+def unitree_g1_tracking_acrobatics_finetune_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create a finetune runner configuration for acrobatic G1 motion tracking."""
+  cfg = unitree_g1_tracking_ppo_runner_cfg()
+  cfg.experiment_name = "g1_tracking_handstand1"
+  cfg.algorithm.learning_rate = 5.0e-4
+  cfg.algorithm.entropy_coef = 0.002
+  cfg.algorithm.desired_kl = 0.008
+  cfg.num_steps_per_env = 32
+  cfg.save_interval = 500
+  cfg.max_iterations = 40_000
+  return cfg
