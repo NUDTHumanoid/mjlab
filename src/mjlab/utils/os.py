@@ -1,6 +1,7 @@
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, Mapping
 
 import yaml
 
@@ -18,6 +19,161 @@ def dump_yaml(filename: Path, data: Dict, sort_keys: bool = False) -> None:
   filename.parent.mkdir(parents=True, exist_ok=True)
   with open(filename, "w") as f:
     yaml.dump(data, f, sort_keys=sort_keys)
+
+
+@dataclass(frozen=True)
+class RslRlCheckpointEnvParity:
+  run_dir: Path
+  env_yaml_path: Path
+  sampling_mode: str | None
+  motion_file: str | None
+  actor_enable_corruption: bool | None
+  critic_enable_corruption: bool | None
+  startup_event_names: tuple[str, ...]
+  push_robot_enabled: bool | None
+  episode_length_s: float | None
+  num_envs: int | None
+
+
+def _resolve_run_dir_from_checkpoint_path(checkpoint_path: str | Path) -> Path:
+  path = Path(checkpoint_path).expanduser().resolve()
+  if not path.exists():
+    raise FileNotFoundError(f"Checkpoint path not found: {path}")
+  return path if path.is_dir() else path.parent
+
+
+def _base_yaml_mapping(path: Path) -> Mapping[str, Any]:
+  with path.open("r", encoding="utf-8") as handle:
+    data = yaml.load(handle, Loader=yaml.BaseLoader) or {}
+  if not isinstance(data, Mapping):
+    raise TypeError(f"Expected YAML mapping at {path}")
+  return data
+
+
+def _mapping_get(mapping: Mapping[str, Any], *keys: str) -> Mapping[str, Any]:
+  current: Mapping[str, Any] | Any = mapping
+  for key in keys:
+    if not isinstance(current, Mapping):
+      return {}
+    current = current.get(key, {})
+  return current if isinstance(current, Mapping) else {}
+
+
+def _optional_bool(value: Any) -> bool | None:
+  if value is None:
+    return None
+  if isinstance(value, bool):
+    return value
+  if isinstance(value, str):
+    lowered = value.strip().lower()
+    if lowered == "true":
+      return True
+    if lowered == "false":
+      return False
+  raise TypeError(f"Expected boolean-compatible value, got {value!r}")
+
+
+def _optional_float(value: Any) -> float | None:
+  if value in (None, ""):
+    return None
+  if isinstance(value, (float, int)):
+    return float(value)
+  if isinstance(value, str):
+    return float(value)
+  raise TypeError(f"Expected float-compatible value, got {value!r}")
+
+
+def _optional_int(value: Any) -> int | None:
+  if value in (None, ""):
+    return None
+  if isinstance(value, int):
+    return value
+  if isinstance(value, str):
+    return int(value)
+  raise TypeError(f"Expected int-compatible value, got {value!r}")
+
+
+def maybe_load_rsl_rl_checkpoint_env_parity(
+  checkpoint_path: str | Path,
+) -> RslRlCheckpointEnvParity | None:
+  run_dir = _resolve_run_dir_from_checkpoint_path(checkpoint_path)
+  env_yaml_path = run_dir / "params" / "env.yaml"
+  if not env_yaml_path.is_file():
+    return None
+
+  data = _base_yaml_mapping(env_yaml_path)
+  observations = _mapping_get(data, "observations")
+  actor_cfg = _mapping_get(observations, "actor")
+  critic_cfg = _mapping_get(observations, "critic")
+  motion_cfg = _mapping_get(data, "commands", "motion")
+  events = _mapping_get(data, "events")
+  startup_event_names = tuple(
+    name
+    for name, cfg in events.items()
+    if isinstance(cfg, Mapping) and cfg.get("mode") == "startup"
+  )
+  motion_file = motion_cfg.get("motion_file")
+  if motion_file == "":
+    motion_file = None
+
+  return RslRlCheckpointEnvParity(
+    run_dir=run_dir,
+    env_yaml_path=env_yaml_path,
+    sampling_mode=motion_cfg.get("sampling_mode"),
+    motion_file=motion_file if isinstance(motion_file, str) else None,
+    actor_enable_corruption=_optional_bool(actor_cfg.get("enable_corruption")),
+    critic_enable_corruption=_optional_bool(critic_cfg.get("enable_corruption")),
+    startup_event_names=startup_event_names,
+    push_robot_enabled="push_robot" in events,
+    episode_length_s=_optional_float(data.get("episode_length_s")),
+    num_envs=_optional_int(_mapping_get(data, "scene").get("num_envs")),
+  )
+
+
+def apply_rsl_rl_checkpoint_env_parity(
+  env_cfg: Any,
+  checkpoint_path: str | Path,
+) -> RslRlCheckpointEnvParity | None:
+  parity = maybe_load_rsl_rl_checkpoint_env_parity(checkpoint_path)
+  if parity is None:
+    return None
+
+  motion_cfg = getattr(env_cfg, "commands", {}).get("motion")
+  if motion_cfg is not None:
+    if parity.sampling_mode is not None:
+      motion_cfg.sampling_mode = parity.sampling_mode
+    if parity.motion_file:
+      motion_cfg.motion_file = parity.motion_file
+
+  actor_cfg = getattr(env_cfg, "observations", {}).get("actor")
+  if actor_cfg is not None and parity.actor_enable_corruption is not None:
+    actor_cfg.enable_corruption = parity.actor_enable_corruption
+
+  critic_cfg = getattr(env_cfg, "observations", {}).get("critic")
+  if critic_cfg is not None and parity.critic_enable_corruption is not None:
+    critic_cfg.enable_corruption = parity.critic_enable_corruption
+
+  if parity.startup_event_names:
+    startup_names = set(parity.startup_event_names)
+    env_cfg.events = {
+      name: cfg
+      for name, cfg in env_cfg.events.items()
+      if getattr(cfg, "mode", None) != "startup" or name in startup_names
+    }
+  else:
+    env_cfg.events = {
+      name: cfg
+      for name, cfg in env_cfg.events.items()
+      if getattr(cfg, "mode", None) != "startup"
+    }
+
+  if parity.push_robot_enabled is False:
+    env_cfg.events.pop("push_robot", None)
+
+  if parity.episode_length_s is not None:
+    env_cfg.episode_length_s = parity.episode_length_s
+
+  return parity
 
 
 def get_checkpoint_path(

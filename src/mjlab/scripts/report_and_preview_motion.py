@@ -25,7 +25,9 @@ def _default_motion_name(input_path: Path) -> str:
 
 
 def _default_work_dir(input_path: Path) -> Path:
-  return (Path.cwd() / "artifacts" / "motion_reports" / _default_motion_name(input_path)).resolve()
+  return (
+    Path.cwd() / "artifacts" / "motion_reports" / _default_motion_name(input_path)
+  ).resolve()
 
 
 def _default_protomotions_root() -> Path | None:
@@ -262,9 +264,9 @@ def main(
   )
 
 
-def cli() -> None:
+def run_cli() -> None:
   tyro.cli(main, config=mjlab.TYRO_FLAGS)
 
 
 if __name__ == "__main__":
-  cli()
+  run_cli()

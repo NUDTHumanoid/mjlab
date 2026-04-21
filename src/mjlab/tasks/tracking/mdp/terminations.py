@@ -34,6 +34,19 @@ def bad_anchor_pos_z_only(
   )
 
 
+def bad_anchor_pos_xy_only(
+  env: ManagerBasedRlEnv, command_name: str, threshold: float
+) -> torch.Tensor:
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  return (
+    torch.norm(
+      command.anchor_pos_w[:, :2] - command.robot_anchor_pos_w[:, :2],
+      dim=1,
+    )
+    > threshold
+  )
+
+
 def bad_anchor_ori(
   env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg, command_name: str, threshold: float
 ) -> torch.Tensor:
@@ -70,6 +83,23 @@ def bad_motion_body_pos(
   return torch.any(error > threshold, dim=-1)
 
 
+def bad_motion_body_mean_pos(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  threshold: float,
+  body_names: tuple[str, ...] | None = None,
+) -> torch.Tensor:
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+
+  body_indexes = _get_body_indexes(command, body_names)
+  error = torch.norm(
+    command.body_pos_relative_w[:, body_indexes]
+    - command.robot_body_pos_w[:, body_indexes],
+    dim=-1,
+  )
+  return error.mean(dim=-1) > threshold
+
+
 def bad_motion_body_pos_z_only(
   env: ManagerBasedRlEnv,
   command_name: str,
@@ -84,3 +114,19 @@ def bad_motion_body_pos_z_only(
     - command.robot_body_pos_w[:, body_indexes, -1]
   )
   return torch.any(error > threshold, dim=-1)
+
+
+def bad_motion_body_mean_pos_z_only(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  threshold: float,
+  body_names: tuple[str, ...] | None = None,
+) -> torch.Tensor:
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+
+  body_indexes = _get_body_indexes(command, body_names)
+  error = torch.abs(
+    command.body_pos_relative_w[:, body_indexes, -1]
+    - command.robot_body_pos_w[:, body_indexes, -1]
+  )
+  return error.mean(dim=-1) > threshold

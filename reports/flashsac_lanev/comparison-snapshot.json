@@ -1,0 +1,69 @@
+{
+  "baseline_sha": "2fc0c19dfc4b87187d6372bf97965b3d40bda6d0",
+  "metric_keys": [
+    "success_rate",
+    "mpkpe",
+    "r_mpkpe",
+    "joint_vel_error",
+    "ee_pos_error",
+    "ee_ori_error"
+  ],
+  "rows": [
+    {
+      "lane_id": "authoritative_native_ppo",
+      "role": "authoritative_floor",
+      "backend": "ppo",
+      "status": "source_of_truth",
+      "run_dir": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000",
+      "checkpoint_file": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt",
+      "motion_file": "/home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz",
+      "notes": "Canonical PPO floor from the user-supplied successful native run. Do not downgrade PPO capability based on local reproduced eval/play telemetry."
+    },
+    {
+      "lane_id": "local_reproduced_ppo",
+      "role": "debug_signal_only",
+      "backend": "ppo",
+      "status": "shared_path_debug_signal",
+      "metrics": {
+        "success_rate": 0.25,
+        "mpkpe": 0.09824308007955551,
+        "r_mpkpe": 0.052701495587825775,
+        "joint_vel_error": 4.295935153961182,
+        "ee_pos_error": 0.12276540696620941,
+        "ee_ori_error": 0.21722421050071716
+      },
+      "notes": "Checkpoint+motion replay under shared local runtime/eval/inference plumbing. Useful for reproduction debugging, not for redefining PPO capability."
+    },
+    {
+      "lane_id": "flashsac_reference_smoke",
+      "role": "candidate_reference",
+      "backend": "flashsac",
+      "status": "current_flashsac_reference",
+      "metrics": {
+        "success_rate": 0.0,
+        "mpkpe": 0.1361,
+        "r_mpkpe": 0.09862102568149567,
+        "joint_vel_error": 6.634036064147949,
+        "ee_pos_error": 0.1659,
+        "ee_ori_error": 0.5170247554779053
+      },
+      "notes": "Current FlashSAC smoke/reference artifact. Compare against the authoritative PPO floor only after shared-path reproduction issues are separated."
+    }
+  ],
+  "local_minus_flashsac_delta": {
+    "success_rate": 0.25,
+    "mpkpe": -0.03785691992044449,
+    "r_mpkpe": -0.04591953009366989,
+    "joint_vel_error": -2.3381009101867676,
+    "ee_pos_error": -0.04313459303379058,
+    "ee_ori_error": -0.2998005449771881
+  },
+  "shared_path_root_cause": "evaluate.py and play.py load env/agent config from the current task_id instead of the saved run params in the checkpoint directory. Replaying the authoritative PPO checkpoint under the default task semantics reproduces failure; replaying under the acrobatics-equivalent task semantics restores success.",
+  "implication_for_flashsac": "FlashSAC comparisons can be invalidated by the same config-loading/task-id mismatch before any algorithm-specific conclusion is warranted.",
+  "notes": [
+    "Authoritative native PPO success remains the only PPO capability floor. Local reproduced PPO eval/play must stay debug-only until parity is restored.",
+    "Current local reproduced PPO metrics are debugging telemetry for the shared path, not a replacement for the authoritative PPO baseline.",
+    "Current best shared-path root cause: evaluate.py and play.py load env/agent config from the current task_id instead of the saved run params in the checkpoint directory. Replaying the authoritative PPO checkpoint under the default task semantics reproduces failure; replaying under the acrobatics-equivalent task semantics restores success.",
+    "FlashSAC comparison implication: FlashSAC comparisons can be invalidated by the same config-loading/task-id mismatch before any algorithm-specific conclusion is warranted."
+  ]
+}

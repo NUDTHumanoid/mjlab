@@ -103,12 +103,18 @@ class RewardManager(ManagerBase):
     if env_ids is None:
       env_ids = slice(None)
     extras = {}
+    total_reward = torch.zeros(1, dtype=torch.float32, device=self.device)
     for key in self._episode_sums.keys():
       episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
       extras["Episode_Reward/" + key] = (
         episodic_sum_avg / self._env.max_episode_length_s
       )
+      total_reward += episodic_sum_avg
       self._episode_sums[key][env_ids] = 0.0
+    episode_lengths = self._env.episode_length_buf[env_ids].float()
+    extras["Episode_Reward/total"] = total_reward.squeeze(0)
+    extras["Episode/length_steps"] = torch.mean(episode_lengths)
+    extras["Episode/length_seconds"] = torch.mean(episode_lengths) * self._env.step_dt
     for term_cfg in self._class_term_cfgs:
       term_cfg.func.reset(env_ids=env_ids)
     return extras

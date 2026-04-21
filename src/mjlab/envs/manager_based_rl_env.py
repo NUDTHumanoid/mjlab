@@ -406,17 +406,9 @@ class ManagerBasedRlEnv:
     self.reward_buf = self.reward_manager.compute(dt=self.step_dt)
     self.metrics_manager.compute()
 
-    # Reset envs that terminated/timed-out and log the episode info.
-    reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
-    if len(reset_env_ids) > 0:
-      self.recorder_manager.record_pre_reset(reset_env_ids)
-      self._reset_idx(reset_env_ids)
-      self.scene.write_data_to_sim()
-
     # Single forward() call: recompute derived quantities from current
-    # qpos/qvel for every env. For non-reset envs this resolves the
-    # one-substep staleness left by mj_step; for reset envs it picks up
-    # the freshly written reset state.
+    # qpos/qvel for every env. This resolves the one-substep staleness left by
+    # mj_step before computing commands, events, and observations.
     self.sim.forward()
 
     self.command_manager.compute(dt=self.step_dt)
@@ -427,9 +419,41 @@ class ManagerBasedRlEnv:
       self.event_manager.apply(mode="interval", dt=self.step_dt)
 
     self.sim.sense()
-    self.obs_buf = self.observation_manager.compute(update_history=True)
+    pre_reset_obs = self.observation_manager.compute(update_history=True)
+
+    # Reset envs that terminated/timed-out and log the episode info.
+    reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
     if len(reset_env_ids) > 0:
+      self.recorder_manager.record_pre_reset(reset_env_ids)
+
+      def _clone_obs(
+        obs: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+      ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
+        cloned: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {}
+        for group_name, group_obs in obs.items():
+          if isinstance(group_obs, torch.Tensor):
+            cloned[group_name] = group_obs.clone()
+          else:
+            cloned[group_name] = {
+              term_name: term_obs.clone() for term_name, term_obs in group_obs.items()
+            }
+        return cloned
+
+      self.extras["final_obs"] = _clone_obs(pre_reset_obs)
+      self._reset_idx(reset_env_ids)
+      self.scene.write_data_to_sim()
+      self.sim.forward()
+      self.sim.sense()
+      # Seed reset rows from their new observation without advancing history a
+      # second time for the rest of the batch.
+      self.obs_buf = self.observation_manager.compute(
+        update_history=False, prime_history_env_ids=reset_env_ids
+      )
       self.recorder_manager.record_post_reset(reset_env_ids)
+    else:
+      self.obs_buf = pre_reset_obs
+      self.extras.pop("final_obs", None)
+
     self.recorder_manager.record_post_step()
 
     return (

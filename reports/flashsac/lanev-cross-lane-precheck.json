@@ -1,0 +1,286 @@
+{
+  "generated_at": "2026-04-15T11:11:30.859348+00:00",
+  "task": {
+    "id": "9",
+    "subject": "LaneV cross-lane acceptance precheck",
+    "description": "Using the published Lane0 manifest plus completed LaneA/LaneB/LaneC/LaneD outputs on leader HEAD, assemble the first cross-lane comparison snapshot and run an acceptance precheck. Produce a verifier artifact bundle that records completed lanes, pending gaps, whether any cosmetic env relaxation leaked into mainline, and what exact smoke/eval commands should run next. Prefer artifacts/scripts over code changes; only change verifier-owned files if strictly necessary."
+  },
+  "mailbox_follow_up": {
+    "message_id": "ca5c31ca-2f3b-4f00-afcf-40a5d60daf5a",
+    "instruction": "Treat the user-provided native PPO run/checkpoint as the authoritative gold baseline and stop using the earlier failed local PPO smoke as the PPO floor."
+  },
+  "artifact_bundle_root": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lanev_precheck",
+  "tracked_report_relative_root": "reports/flashsac",
+  "source_of_truth": {
+    "spec_path": "/home/ssy/ssy_files/mjlab/.omx/specs/deep-interview-flashsac-rootcause-parallel-refactor.md",
+    "prd_path": "/home/ssy/ssy_files/mjlab/.omx/plans/prd-flashsac-tracking-rootcause-team.md",
+    "test_spec_path": "/home/ssy/ssy_files/mjlab/.omx/plans/test-spec-flashsac-tracking-rootcause-team.md",
+    "lane0_manifest_path": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/shared-manifest.json",
+    "lane0_baseline_provenance_path": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/baseline-provenance.json",
+    "lane0_ppo_control_manifest_path": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/ppo-control-manifest.json",
+    "lane0_comparison_template_path": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/comparison-template.csv",
+    "task_paths": {
+      "task_1": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-1.json",
+      "task_2": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-2.json",
+      "task_3": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-3.json",
+      "task_4": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-4.json",
+      "task_5": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-5.json",
+      "task_8": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-8.json",
+      "task_9": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-9.json",
+      "task_10": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-10.json",
+      "task_11": "/home/ssy/ssy_files/mjlab/.omx/state/team/use-omx-specs-deep-interview-f/tasks/task-11.json"
+    }
+  },
+  "leader_head": {
+    "current_sha": "407660e91ad7468826c68990f3ea9ec017575f2c",
+    "current_short_sha": "407660e",
+    "baseline_sha": "2fc0c19dfc4b87187d6372bf97965b3d40bda6d0",
+    "lane0_manifest_observed_head_sha": "3406849fabb795c1438e842844318bc7bdf6dc18",
+    "lane0_manifest_matches_current_head": false,
+    "lanev_authoritative_bundle_head_sha": "f3c58a46995c94c8d8cb65d3f2831c9dbe272edd",
+    "comparison_template_row_count_excluding_header": 0
+  },
+  "contract_hash_drift": [
+    {
+      "contract": "flashsac_train",
+      "baseline_hash": "ea7a6140cd9e760c152fea6f2f341bcc59b12a111a5c49c31d6746e83f6585ee",
+      "current_head_hash": "74f308a133e730cadaccf2421889a8f49c47811a5109d21345b7ac86f0537efa",
+      "changed_on_leader_head": true
+    },
+    {
+      "contract": "flashsac_eval",
+      "baseline_hash": "42b4542c65a195db01dc99018552bfa8d1821a9e87ee2627484c51da745b4173",
+      "current_head_hash": "e2b3f0b043f43319487282c55cdc482a5fba303bba34a186c52639221d59c49c",
+      "changed_on_leader_head": true
+    },
+    {
+      "contract": "flashsac_play",
+      "baseline_hash": "7a9a22d3b508b41c57dd3a6ba06b86517cf5b8220ee18b80e5d5f134050dc1e1",
+      "current_head_hash": "75542c8030056251da12ba49e55561715b271bdbb63d835ee6671a9ea00e0e63",
+      "changed_on_leader_head": true
+    },
+    {
+      "contract": "ppo_train",
+      "baseline_hash": "e980459f1f318602b162cbe8080366c8917256f3f276d8048835210ee2c85a38",
+      "current_head_hash": "e980459f1f318602b162cbe8080366c8917256f3f276d8048835210ee2c85a38",
+      "changed_on_leader_head": false
+    },
+    {
+      "contract": "ppo_eval",
+      "baseline_hash": "2ce4fd9ff1055df33f79c692e9dbbf4c085ea7490525e77587c787a97f2a6b25",
+      "current_head_hash": "7b99d8b6d5eac738214548f815700f73e59c187b0969934030cfe5690be5c546",
+      "changed_on_leader_head": true
+    }
+  ],
+  "completed_lane_summary": [
+    {
+      "lane": "lane0-manifest",
+      "task_id": "1",
+      "status": "completed",
+      "commit": "ad9a6cc58053f02a9b165e6a5aaa176017dce078",
+      "present_on_leader_head": true,
+      "artifacts": [
+        "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/shared-manifest.json",
+        "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/baseline-provenance.json",
+        "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/ppo-control-manifest.json",
+        "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/comparison-template.csv"
+      ],
+      "summary": "Published the shared manifest, PPO control manifest, baseline provenance, and comparison template.",
+      "key_findings": [
+        "Pinned baseline SHA remains 2fc0c19dfc4b87187d6372bf97965b3d40bda6d0.",
+        "Manifest was last refreshed on head 3406849 and is stale relative to current leader head 407660e."
+      ],
+      "promotability": "required-input"
+    },
+    {
+      "lane": "laneA-parity",
+      "task_id": "2",
+      "status": "completed",
+      "commit": "cf96fba",
+      "present_on_leader_head": true,
+      "changed_files": [
+        "src/mjlab/flashsac/agent.py"
+      ],
+      "summary": "Fixed FlashSAC LR warmup/decay scheduling to use interaction-step-derived update budgets after the real num_envs is observed.",
+      "verification_highlights": [
+        "targeted backend tests passed (23 tests)",
+        "Cartpole FlashSAC smoke train passed",
+        "merged-head tracking smoke artifact still missing"
+      ],
+      "promotability": "mainline-candidate-awaiting-tracking-smoke"
+    },
+    {
+      "lane": "laneB-bridge",
+      "task_id": "3",
+      "status": "completed",
+      "commit": "b5c8189",
+      "present_on_leader_head": true,
+      "changed_files": [
+        "src/mjlab/flashsac/runtime.py",
+        "src/mjlab/tasks/tracking/scripts/evaluate.py",
+        "tests/test_flashsac_bridge_contract.py"
+      ],
+      "summary": "Canonical evaluation overrides and zero-safe metric aggregation are on leader HEAD, and post-manifest validation produced a PASS-with-caution bundle.",
+      "verification_highlights": [
+        "post-manifest validation bundle exists under laneB-bridge/post-manifest-validation/leader-head-f3c58a4",
+        "evaluate.py stays on canonical tracking thresholds",
+        "play.py still uses the relaxed inference helper, so acceptance-video semantics remain an explicit follow-up decision"
+      ],
+      "promotability": "mainline-candidate-with-post-manifest-validation"
+    },
+    {
+      "lane": "laneC-trainer-systems",
+      "task_id": "4",
+      "status": "completed",
+      "commit": "e3082b3",
+      "present_on_leader_head": true,
+      "changed_files": [
+        "src/mjlab/flashsac/trainer.py"
+      ],
+      "summary": "Normalized runtime device metadata and recorded runtime.yaml device/buffer/amp settings during training; follow-up metadata integration also landed cleanly.",
+      "verification_highlights": [
+        "focused trainer tests passed (4 tests)",
+        "Cartpole FlashSAC CPU smoke run passed",
+        "tracking-task smoke artifact still missing"
+      ],
+      "promotability": "mainline-candidate-awaiting-tracking-smoke"
+    },
+    {
+      "lane": "laneD-env-contract-control",
+      "task_id": "5",
+      "status": "completed",
+      "commit": "eb4cc72",
+      "present_on_leader_head": true,
+      "changed_files": [
+        "src/mjlab/tasks/tracking/mdp/rewards.py",
+        "src/mjlab/tasks/tracking/mdp/metrics.py",
+        "src/mjlab/tasks/tracking/mdp/terminations.py",
+        "tests/tasks/tracking/test_env_contract_controls.py"
+      ],
+      "summary": "Added opt-in planar/height env-contract probes for counterexample measurement without changing default tracking config wiring.",
+      "verification_highlights": [
+        "focused env-contract tests passed",
+        "helpers are not referenced by default tracking config files",
+        "control lane remains non-promotable unless generic-alignment proof emerges"
+      ],
+      "promotability": "quarantined-control-only"
+    }
+  ],
+  "ppo_gold_baseline": {
+    "status": "authoritative_native_ppo_gold_baseline",
+    "source": "user-supplied successful native PPO run",
+    "backend": "ppo",
+    "task_id": "Mjlab-Tracking-Flat-Unitree-G1",
+    "run_dir": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000",
+    "preferred_checkpoint_file": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt",
+    "motion_file": "/home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz",
+    "params": {
+      "agent_yaml": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/params/agent.yaml",
+      "env_yaml": "/home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/params/env.yaml"
+    },
+    "artifacts": {
+      "checkpoint_sha256": "29bf464dfb8bf28bde707054a58aff6e363af9e97f23eafd90a58bc13ae2940c",
+      "checkpoint_bytes": 6769351,
+      "motion_file_sha256": "89d469b7ac8b1c0cb75425ad3ef43f2e6336fecd809d5981b41794e3c9204818",
+      "motion_file_bytes": 1344002,
+      "agent_yaml_sha256": "57681a7f84aa583ef2f14dc2d46cd9e47f63bebdf6fcd74beaecd9f922f96c6e",
+      "env_yaml_sha256": "83404733179261cf1e7d11a4f4a4fb1af847159a8537fe6d260c535dcf3d5c8b"
+    },
+    "local_reproduction_commands": {
+      "evaluate": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run evaluate-tracking Mjlab-Tracking-Flat-Unitree-G1 --checkpoint-file /home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt --motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --num-envs 4 --device cpu --output-file $OMX_TEAM_LEADER_CWD/.omx/logs/lanev-ppo-authoritative-baseline-eval.json",
+      "play": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run python <inline-rslrl-video-recorder> --checkpoint-file /home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt --motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --num-envs 1 --device cpu --video-length 200 --output-video $OMX_TEAM_LEADER_CWD/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/play/lanev-ppo-control-step-0.mp4"
+    },
+    "comparison_guidance": "Separate native PPO capability from local reproduced eval/play behavior in verifier notes and future FlashSAC comparisons.",
+    "authoritative_train_command": "canonical observed PPO run (reconstructed from saved params): cd \"$OMX_TEAM_LEADER_CWD\" && uv run train Mjlab-Tracking-Flat-Unitree-G1 --env.commands.motion.motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --env.scene.num-envs 4096 --agent.max-iterations 40000 --agent.experiment-name g1_tracking_handstand1 --agent.run-name handstand1_acrobatics_ft_40000 --agent.seed 42 --agent.resume true --agent.load-run 2026-04-13_16-06-46_handstand1_high_seed42 --agent.load-checkpoint model_4999.pt",
+    "lanev_artifact_bundle_root": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42",
+    "lanev_summary_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/summary/lanev-smoke-summary.json",
+    "lanev_comparison_row_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/comparison-row.json",
+    "lanev_hashes_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/hashes.json",
+    "lanev_metrics_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/summary/metrics.json",
+    "lanev_video_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/play/lanev-ppo-control-step-0.mp4",
+    "lanev_visual_review_manifest": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/play/visual-review-assets.json",
+    "local_reproduced_metrics": {
+      "success_rate": 0.25,
+      "mpkpe": 0.10915069282054901,
+      "r_mpkpe": 0.06123862788081169,
+      "joint_vel_error": 4.870287895202637,
+      "ee_pos_error": 0.1373407244682312,
+      "ee_ori_error": 0.2519110441207886
+    },
+    "local_reproduction_status": "debug-signal-only-until-task-11-resolves",
+    "bundle_status": "authoritative_native_ppo_baseline_documented_local_reproduction_bugflagged"
+  },
+  "pending_gaps": [
+    {
+      "gap": "lane0-manifest-stale-on-current-head",
+      "detail": "Shared manifest observed head 3406849fabb795c1438e842844318bc7bdf6dc18 but leader head is now 407660e91ad7468826c68990f3ea9ec017575f2c; refresh before using comparison hashes as current truth."
+    },
+    {
+      "gap": "comparison-table-still-empty-despite-available-bundles",
+      "detail": "/home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0/comparison-template.csv still contains only the header row even though LaneB post-manifest validation and LaneV PPO baseline bundles already exist."
+    },
+    {
+      "gap": "laneA-and-laneC-merged-head-tracking-smoke-still-missing",
+      "detail": "Lane A and Lane C still lack merged-head tracking smoke/eval/play artifacts, so there is no mainline-candidate row to compare against the PPO floor."
+    },
+    {
+      "gap": "laneV-local-reproduction-divergence-still-open",
+      "detail": "Task 11 remains in progress: the local checkpoint+motion evaluate/play path still diverges from the authoritative native PPO success and must remain debug-only telemetry."
+    },
+    {
+      "gap": "baseline-training-override-risk-still-open",
+      "detail": "FlashSAC training overrides in src/mjlab/flashsac/config.py still widen anchor thresholds and drop ee_body_pos during training; this predates the follow-up lanes and remains a genericity risk to review during acceptance."
+    }
+  ],
+  "cosmetic_env_relaxation_check": {
+    "status": "no_new_laneD_leak_into_canonical_eval_path_detected; acceptance_video_semantics_still_split; baseline_flashsac_train_override_risk_remains",
+    "evidence": [
+      "Task 8 post-manifest validation confirmed evaluate.py uses apply_tracking_evaluation_overrides() for both PPO and FlashSAC evaluation paths on leader HEAD.",
+      "The same validation also confirmed play.py still uses apply_flashsac_tracking_inference_overrides(), so acceptance-video semantics remain distinct from canonical evaluation semantics.",
+      "LaneD helper names still appear only in src/mjlab/tasks/tracking/mdp/{rewards,metrics,terminations}.py and their dedicated test; they are not referenced by default tracking config wiring.",
+      "The threshold widening and ee_body_pos removal in src/mjlab/flashsac/config.py already existed at baseline 2fc0c19, so they are not a new leak from LaneD or the evaluation refactor."
+    ],
+    "default_wiring_check": {
+      "opt_in_helpers_only_defined_in_mdp_modules": true,
+      "default_tracking_config_references_opt_in_helpers": false,
+      "canonical_evaluate_path_preserves_default_anchor_thresholds": true,
+      "play_path_uses_relaxed_inference_helper": true,
+      "baseline_training_override_still_present": true
+    }
+  },
+  "next_commands": {
+    "refresh_manifest": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run flashsac-lane0-manifest --leader-cwd /home/ssy/ssy_files/mjlab --output-dir /home/ssy/ssy_files/mjlab/.omx/specs/flashsac_lane0",
+    "laneA-parity": {
+      "label": "Lane A upstream parity",
+      "backend": "flashsac",
+      "notes": "First merged-head candidate that still needs tracking smoke evidence.",
+      "smoke_train": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run train Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --registry-name <motion-artifact> --agent.seed 42 --agent.run-name laneA-parity-seed-42",
+      "smoke_eval": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run evaluate-tracking Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --checkpoint-file <laneA-parity-seed-42-checkpoint-file> --motion-file <absolute-motion-npz> --num-envs 1024 --output-file $OMX_TEAM_LEADER_CWD/.omx/artifacts/flashsac_tracking/laneA-parity/seed-42/eval/eval.json",
+      "smoke_play": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run play Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --checkpoint-file <laneA-parity-seed-42-checkpoint-file> --motion-file <absolute-motion-npz> --num-envs 1 --viewer viser --video"
+    },
+    "laneC-trainer-systems": {
+      "label": "Lane C trainer/systems",
+      "backend": "flashsac",
+      "notes": "Second merged-head candidate if Lane A still fails or needs comparison coverage.",
+      "smoke_train": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run train Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --registry-name <motion-artifact> --agent.seed 42 --agent.run-name laneC-trainer-systems-seed-42",
+      "smoke_eval": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run evaluate-tracking Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --checkpoint-file <laneC-trainer-systems-seed-42-checkpoint-file> --motion-file <absolute-motion-npz> --num-envs 1024 --output-file $OMX_TEAM_LEADER_CWD/.omx/artifacts/flashsac_tracking/laneC-trainer-systems/seed-42/eval/eval.json",
+      "smoke_play": "cd \"$OMX_TEAM_LEADER_CWD\" && uv run play Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --checkpoint-file <laneC-trainer-systems-seed-42-checkpoint-file> --motion-file <absolute-motion-npz> --num-envs 1 --viewer viser --video"
+    },
+    "laneV-ppo-authoritative-debug-repro": {
+      "label": "Lane V authoritative PPO checkpoint local reproduction (debug-signal-only)",
+      "backend": "ppo",
+      "notes": "Do not use this command to lower the PPO floor; rerun only if task 11 needs fresh current-head reproduction evidence.",
+      "smoke_eval": "local reproduced path: cd \"$OMX_TEAM_LEADER_CWD\" && uv run evaluate-tracking Mjlab-Tracking-Flat-Unitree-G1 --checkpoint-file /home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt --motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --num-envs 4 --device cpu --output-file /home/ssy/ssy_files/mjlab/.omx/logs/lanev-ppo-authoritative-baseline-eval.json",
+      "smoke_play": "local reproduced path: headless-equivalent authoritative PPO playback: cd \"$OMX_TEAM_LEADER_CWD\" && uv run python <inline-rslrl-video-recorder> --checkpoint-file /home/ssy/ssy_files/mjlab/logs/rsl_rl/g1_tracking_handstand1/2026-04-14_12-19-21_handstand1_acrobatics_ft_40000/model_31500.pt --motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --num-envs 1 --device cpu --video-length 200 --output-video /home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/laneV-ppo-control/seed-42/play/lanev-ppo-control-step-0.mp4"
+    }
+  },
+  "recommendation": {
+    "overall_status": "authoritative_ppo_floor_available_but_acceptance_still_blocked_on_manifest_refresh_and_shared_path_diagnosis",
+    "next_actions": [
+      "Refresh the Lane0 manifest on current leader HEAD before recording any new comparison rows.",
+      "Carry forward the user-provided native PPO run/checkpoint as the PPO gold baseline; do not schedule a replacement PPO smoke to set the floor.",
+      "Use the existing laneV local reproduced eval/play bundle only as shared-path debugging evidence until task 11 resolves.",
+      "Run merged-head tracking smoke/eval/play for LaneA and LaneC, then populate comparison rows under the refreshed manifest."
+    ]
+  }
+}

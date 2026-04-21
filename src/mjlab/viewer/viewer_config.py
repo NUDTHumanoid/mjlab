@@ -33,3 +33,8 @@ class ViewerConfig:
   enable_shadows: bool = True
   height: int = 240
   width: int = 320
+
+
+# Backward-compatible alias for YAML tags emitted by older config dumps that
+# referenced the nested enum via ``mjlab.viewer.viewer_config.OriginType``.
+OriginType = ViewerConfig.OriginType

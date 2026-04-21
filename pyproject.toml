@@ -68,6 +68,8 @@ pyroki-npz-to-csv = "mjlab.scripts.pyroki_npz_to_csv:main"
 smpl-keypoints-to-g1-npz = "mjlab.scripts.smpl_keypoints_to_g1_npz:main"
 build-tracking-motion = "mjlab.scripts.build_tracking_motion:main"
 report-and-preview-motion = "mjlab.scripts.report_and_preview_motion:cli"
+evaluate-tracking = "mjlab.scripts.evaluate_tracking:main"
+flashsac-lane0-manifest = "mjlab.scripts.flashsac_lane0_manifest:main"
 
 [dependency-groups]
 dev = [

@@ -1,5 +1,6 @@
 """Script to train RL agent with RSL-RL."""
 
+import argparse
 import logging
 import os
 import sys
@@ -11,6 +12,11 @@ from typing import Literal, cast
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
+from mjlab.flashsac import FlashSACTrainConfig, launch_flashsac_training
+from mjlab.flashsac.reference_ppo import (
+  ReferencePpoTrainConfig,
+  launch_reference_ppo_training,
+)
 from mjlab.rl import MjlabOnPolicyRunner, RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
@@ -239,9 +245,39 @@ def main():
     config=mjlab.TYRO_FLAGS,
   )
 
+  backend_parser = argparse.ArgumentParser(add_help=False)
+  backend_parser.add_argument(
+    "--backend",
+    choices=("rsl_rl", "flashsac", "reference_ppo"),
+    default="rsl_rl",
+  )
+  backend_args, filtered_args = backend_parser.parse_known_args(remaining_args)
+
+  if backend_args.backend == "flashsac":
+    args = tyro.cli(
+      FlashSACTrainConfig,
+      args=filtered_args,
+      default=FlashSACTrainConfig.from_task(chosen_task),
+      prog=sys.argv[0] + f" {chosen_task}",
+      config=mjlab.TYRO_FLAGS,
+    )
+    launch_flashsac_training(task_id=chosen_task, args=args)
+    return
+
+  if backend_args.backend == "reference_ppo":
+    args = tyro.cli(
+      ReferencePpoTrainConfig,
+      args=filtered_args,
+      default=ReferencePpoTrainConfig.from_task(chosen_task),
+      prog=sys.argv[0] + f" {chosen_task}",
+      config=mjlab.TYRO_FLAGS,
+    )
+    launch_reference_ppo_training(task_id=chosen_task, args=args)
+    return
+
   args = tyro.cli(
     TrainConfig,
-    args=remaining_args,
+    args=filtered_args,
     default=TrainConfig.from_task(chosen_task),
     prog=sys.argv[0] + f" {chosen_task}",
     config=mjlab.TYRO_FLAGS,

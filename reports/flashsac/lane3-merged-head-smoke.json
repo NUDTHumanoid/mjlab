@@ -1,0 +1,140 @@
+{
+  "generated_at": "2026-04-15T11:33:20.277734+00:00",
+  "team": "source-of-truth-omx-specs-deep",
+  "worker": "worker-3",
+  "task_id": "3",
+  "source_of_truth": {
+    "spec_path": "/home/ssy/ssy_files/mjlab/.omx/specs/deep-interview-flashsac-rootcause-parallel-refactor.md",
+    "prd_path": "/home/ssy/ssy_files/mjlab/.omx/plans/prd-flashsac-tracking-rootcause-team.md",
+    "test_spec_path": "/home/ssy/ssy_files/mjlab/.omx/plans/test-spec-flashsac-tracking-rootcause-team.md"
+  },
+  "git": {
+    "head_sha": "606d84a1e748cb188510a23a0368eb0b39e6d8a5",
+    "head_short_sha": "606d84a",
+    "baseline_sha": "2fc0c19dfc4b87187d6372bf97965b3d40bda6d0"
+  },
+  "smoke_run": {
+    "log_dir": "/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3/logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42",
+    "checkpoint_dir": "/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3/logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42/step_62",
+    "first_checkpoint_dir": "/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3/logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42/step_28",
+    "runtime_yaml": "/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3/logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42/params/runtime.yaml",
+    "train_command": "cd \"/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3\" && uv run train Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --env.commands.motion.motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --agent.seed 42 --agent.run-name lane3-merged-head-smoke-seed-42 --agent.num-env-steps 250000 --agent.logger tensorboard",
+    "eval_command": "cd \"/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3\" && uv run evaluate-tracking Mjlab-Tracking-Flat-Unitree-G1 --backend flashsac --checkpoint-file /home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3/logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42/step_62 --motion-file /home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz --num-envs 1024 --device cuda:0 --output-file /home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/eval/eval.json",
+    "play_command": "cd \"/home/ssy/ssy_files/mjlab/.omx/team/source-of-truth-omx-specs-deep/worktrees/worker-3\" && uv run python /home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/commands/play-headless-recorder.py",
+    "motion_file": "/home/ssy/ssy_files/mjlab/artifacts/motion_runs/handstand1_high/pipeline/mjlab/motion.npz"
+  },
+  "artifacts": {
+    "artifact_root": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42",
+    "eval_json": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/eval/eval.json",
+    "video_path": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/play/lane3-merged-head-step-0.mp4",
+    "hashes_json": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/hashes.json",
+    "summary_metrics": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/summary/metrics.json",
+    "comparison_row": "/home/ssy/ssy_files/mjlab/.omx/artifacts/flashsac_tracking/lane3-merged-head/seed-42/comparison-row.json"
+  },
+  "runtime": {
+    "task_id": "Mjlab-Tracking-Flat-Unitree-G1",
+    "seed": 42,
+    "device": "cuda:0",
+    "buffer_device_type": "cuda:0",
+    "use_amp": true,
+    "cuda_visible_devices": "0",
+    "num_envs": 4096,
+    "num_env_steps": 250000,
+    "num_interaction_steps": 62,
+    "updates_per_interaction_step": 2.0,
+    "target_update_budget": 124.0,
+    "logging_per_interaction_step": 1,
+    "save_checkpoint_per_interaction_step": 7,
+    "final_env_steps": 253952,
+    "final_interaction_steps": 62,
+    "actual_update_steps": 72,
+    "actual_updates_per_interaction_step": 1.1612903225806452,
+    "final_replay_size": 245760,
+    "checkpoint_count": 6,
+    "final_checkpoint_dir": "logs/flashsac/tracking_flat_unitree_g1_flashsac/2026-04-15_19-27-32_lane3-merged-head-smoke-seed-42/step_62"
+  },
+  "eval_metrics": {
+    "success_rate": 0.0,
+    "mpkpe": 0.13610216975212097,
+    "r_mpkpe": 0.06861449778079987,
+    "joint_vel_error": 9.927271842956543,
+    "ee_pos_error": 0.1659158319234848,
+    "ee_ori_error": 0.45917844772338867
+  },
+  "training_scalar_tail": {
+    "actor/loss": {
+      "step": 253952,
+      "value": 0.9592125415802002,
+      "count": 36
+    },
+    "actor/entropy": {
+      "step": 253952,
+      "value": -46.77478790283203,
+      "count": 36
+    },
+    "actor/mean_action": {
+      "step": 253952,
+      "value": -0.03713666647672653,
+      "count": 36
+    },
+    "temperature/value": {
+      "step": 253952,
+      "value": 0.010089605115354061,
+      "count": 36
+    },
+    "temperature/loss": {
+      "step": 253952,
+      "value": -0.3320239186286926,
+      "count": 36
+    },
+    "critic/loss": {
+      "step": 253952,
+      "value": 4.359889984130859,
+      "count": 36
+    },
+    "critic/max_entropy_bonus": {
+      "step": 253952,
+      "value": 1.297623634338379,
+      "count": 36
+    },
+    "Episode_Reward/total": {
+      "step": 253952,
+      "value": -4.663280487060547,
+      "count": 36
+    },
+    "Metrics/motion/error_body_pos": {
+      "step": 253952,
+      "value": 0.6487683653831482,
+      "count": 36
+    },
+    "Metrics/motion/error_joint_vel": {
+      "step": 253952,
+      "value": 16.448335647583008,
+      "count": 36
+    },
+    "Perf/effective_updates_per_interaction_step": {
+      "step": 253952,
+      "value": 1.1612902879714966,
+      "count": 37
+    },
+    "Perf/replay_fill_ratio": {
+      "step": 253952,
+      "value": 2.4576001167297363,
+      "count": 37
+    }
+  },
+  "verdict": {
+    "status": "alive_but_not_learning_at_250k_gate",
+    "blocked_on_worker_1": false,
+    "reasoning": [
+      "Real checkpoints exist at steps 28/35/42/49/56/62 and runtime.yaml records 253,952 env steps.",
+      "The final smoke evaluation over 1024 episodes finished with success_rate=0.0, mpkpe=0.1361, and ee_pos_error=0.1659.",
+      "Canonical evaluation reported 0 truncated successes: 1024/1024 episodes ended via termination, which is not PPO-comparable.",
+      "The recorded play video is useful diagnostic evidence, but it still runs under FlashSAC inference overrides rather than canonical evaluation semantics."
+    ],
+    "next_steps": [
+      "Compare this 250k smoke bundle against the authoritative PPO floor and any worker-1 shared-path findings before spending 1M+ steps.",
+      "If the team wants a longer FlashSAC run, keep the exact motion file/seed and extend from the generated checkpoint path rather than re-running from scratch without analysis."
+    ]
+  }
+}
