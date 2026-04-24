@@ -331,8 +331,8 @@ class RobotDebugApp:
     self.cfg = cfg
     self.session = create_robot_session(cfg)
     self.server = viser.ViserServer(label="Robot Debugger")
-    self.scene = ViserMujocoScene.create(
-      self.server, self.session.sim.mj_model, num_envs=1
+    self.scene = ViserMujocoScene(
+      server=self.server, mj_model=self.session.sim.mj_model, num_envs=1
     )
     self.selected_joint_index = 0
     self.scene.update(self.session.sim.data, env_idx=0)
@@ -398,7 +398,7 @@ class RobotDebugApp:
       self._actuators_html = self.server.gui.add_html("")
 
     with tabs.add_tab("Scene", icon=viser.Icon.CUBE):
-      self.scene.create_visualization_gui(show_debug_viz_control=False)
+      self.scene.create_scene_gui(show_debug_viz_control=False)
 
     self._refresh_panels()
 
@@ -487,9 +487,9 @@ class TaskDebugApp:
     self.cfg = cfg
     self.session = create_task_session(cfg)
     self.server = viser.ViserServer(label="Task Debugger")
-    self.scene = ViserMujocoScene.create(
-      self.server,
-      self.session.env.sim.mj_model,
+    self.scene = ViserMujocoScene(
+      server=self.server,
+      mj_model=self.session.env.sim.mj_model,
       num_envs=self.session.env.num_envs,
     )
     self.scene.env_idx = 0
@@ -587,7 +587,7 @@ class TaskDebugApp:
       self._control_chain_html = self.server.gui.add_html("")
 
     with tabs.add_tab("Scene", icon=viser.Icon.CUBE):
-      self.scene.create_visualization_gui(show_debug_viz_control=False)
+      self.scene.create_scene_gui(show_debug_viz_control=False)
 
     self._refresh_panels()
 
