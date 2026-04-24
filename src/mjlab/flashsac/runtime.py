@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, cast
 
 import torch
 import yaml
@@ -21,7 +21,7 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 class FlashSACCheckpointEnvParity:
   run_dir: Path
   env_yaml_path: Path
-  sampling_mode: str | None
+  sampling_mode: Literal["adaptive", "uniform", "start"] | None
   motion_file: str | None
   actor_enable_corruption: bool | None
   critic_enable_corruption: bool | None
@@ -190,7 +190,10 @@ def maybe_load_flashsac_checkpoint_env_parity(
   return FlashSACCheckpointEnvParity(
     run_dir=run_dir,
     env_yaml_path=env_yaml_path,
-    sampling_mode=motion_cfg.get("sampling_mode"),
+    sampling_mode=cast(
+      Literal["adaptive", "uniform", "start"] | None,
+      motion_cfg.get("sampling_mode"),
+    ),
     motion_file=motion_file if isinstance(motion_file, str) else None,
     actor_enable_corruption=_optional_bool(actor_cfg.get("enable_corruption")),
     critic_enable_corruption=_optional_bool(critic_cfg.get("enable_corruption")),

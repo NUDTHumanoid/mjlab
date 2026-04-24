@@ -64,15 +64,16 @@ def _validate_keypoint_payload(input_path: Path) -> None:
   right_foot_contacts = np.asarray(motion["right_foot_contacts"])
 
   if positions.ndim != 3 or positions.shape[-1] != 3:
-    raise ValueError(f"positions must have shape (frames, keypoints, 3), got {positions.shape}.")
+    raise ValueError(
+      f"positions must have shape (frames, keypoints, 3), got {positions.shape}."
+    )
   if orientations.ndim != 4 or orientations.shape[-2:] != (3, 3):
     raise ValueError(
       f"orientations must have shape (frames, keypoints, 3, 3), got {orientations.shape}."
     )
   if left_foot_contacts.ndim != 2 or left_foot_contacts.shape[1] != 2:
     raise ValueError(
-      "left_foot_contacts must have shape (frames, 2), "
-      f"got {left_foot_contacts.shape}."
+      f"left_foot_contacts must have shape (frames, 2), got {left_foot_contacts.shape}."
     )
   if right_foot_contacts.ndim != 2 or right_foot_contacts.shape[1] != 2:
     raise ValueError(
@@ -86,9 +87,13 @@ def _validate_keypoint_payload(input_path: Path) -> None:
   if orientations.shape[0] != frame_count:
     raise ValueError("orientations must have the same number of frames as positions.")
   if left_foot_contacts.shape[0] != frame_count:
-    raise ValueError("left_foot_contacts must have the same number of frames as positions.")
+    raise ValueError(
+      "left_foot_contacts must have the same number of frames as positions."
+    )
   if right_foot_contacts.shape[0] != frame_count:
-    raise ValueError("right_foot_contacts must have the same number of frames as positions.")
+    raise ValueError(
+      "right_foot_contacts must have the same number of frames as positions."
+    )
   if not np.isfinite(positions).all():
     raise ValueError("positions must contain only finite values.")
   if not np.isfinite(orientations).all():
@@ -125,7 +130,9 @@ def _validate_retarget_output(output_path: Path) -> None:
   if frame_count == 0:
     raise ValueError("Retarget output must contain at least one frame.")
   if base_frame_wxyz.shape[0] != frame_count:
-    raise ValueError("base_frame_wxyz must have the same frame count as base_frame_pos.")
+    raise ValueError(
+      "base_frame_wxyz must have the same frame count as base_frame_pos."
+    )
   if joint_angles.shape[0] != frame_count:
     raise ValueError("joint_angles must have the same frame count as base_frame_pos.")
   if not np.isfinite(base_frame_pos).all():
@@ -192,7 +199,9 @@ def _can_reuse_cached_outputs(
   try:
     source_path = Path(manifest["source_path"]).expanduser().resolve()
     source_fingerprint = manifest["source_fingerprint"]
-    generated_output_path = Path(manifest["generated_output_path"]).expanduser().resolve()
+    generated_output_path = (
+      Path(manifest["generated_output_path"]).expanduser().resolve()
+    )
     manifest_root = Path(manifest["protomotions_root"]).expanduser().resolve()
     manifest_python = str(manifest["pyroki_python"])
     manifest_source_type = str(manifest["source_type"])

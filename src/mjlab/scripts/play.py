@@ -160,7 +160,8 @@ def _run_rsl_rl_play(task_id: str, cfg: PlayConfig):
   resume_path: Path | None = None
   checkpoint_parity = None
   if TRAINED_MODE:
-    log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
+    experiment_name = agent_cfg["experiment_name"]
+    log_root_path = (Path("logs") / "rsl_rl" / experiment_name).resolve()
     if cfg.checkpoint_file is not None:
       resume_path = Path(cfg.checkpoint_file)
       if not resume_path.exists():
@@ -205,7 +206,9 @@ def _run_rsl_rl_play(task_id: str, cfg: PlayConfig):
       print(f"[INFO]: Using local motion file: {cfg.motion_file}")
       motion_cmd.motion_file = cfg.motion_file
     elif motion_cmd.motion_file and Path(motion_cmd.motion_file).exists():
-      print(f"[INFO]: Using motion file from checkpoint params: {motion_cmd.motion_file}")
+      print(
+        f"[INFO]: Using motion file from checkpoint params: {motion_cmd.motion_file}"
+      )
     elif DUMMY_MODE:
       if not cfg.registry_name:
         raise ValueError(

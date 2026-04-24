@@ -100,8 +100,8 @@ class FlashSACLogger:
     self.history.append(history_entry)
     if self.writer is not None:
       for key, value in payload.items():
-        self.writer.add_scalar(key, value, global_step=step)  # type: ignore[no-untyped-call]
-      self.writer.flush()  # type: ignore[no-untyped-call]
+        self.writer.add_scalar(key, value, global_step=step)
+      self.writer.flush()
     elif self.wandb is not None:
       self.wandb.log(payload, step=step)
 
@@ -169,6 +169,9 @@ def _apply_resume_agent_contract(
     observation_clip_value=saved_cfg.observation_clip_value,
     normalized_G_max=saved_cfg.normalized_G_max,
     asymmetric_observation=saved_cfg.asymmetric_observation,
+    squash_actions=saved_cfg.squash_actions,
+    actor_state_dependent_std=saved_cfg.actor_state_dependent_std,
+    actor_init_std=saved_cfg.actor_init_std,
     actor_num_blocks=saved_cfg.actor_num_blocks,
     actor_hidden_dim=saved_cfg.actor_hidden_dim,
     critic_num_blocks=saved_cfg.critic_num_blocks,

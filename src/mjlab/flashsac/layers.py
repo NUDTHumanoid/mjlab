@@ -103,14 +103,27 @@ class NormalTanhPolicy(nn.Module):
     self,
     hidden_dim: int,
     action_dim: int,
+    squash_output: bool = True,
+    state_dependent_std: bool = True,
+    init_std: float = 1.0,
     log_std_min: float = -10.0,
     log_std_max: float = 2.0,
   ):
     super().__init__()
     self.mean_w = UnitLinear(hidden_dim, action_dim)
     self.mean_bias = nn.Parameter(torch.zeros(action_dim))
-    self.std_w = UnitLinear(hidden_dim, action_dim)
-    self.std_bias = nn.Parameter(torch.zeros(action_dim))
+    self.state_dependent_std = state_dependent_std
+    if state_dependent_std:
+      self.std_w = UnitLinear(hidden_dim, action_dim)
+      self.std_bias = nn.Parameter(torch.zeros(action_dim))
+      self.log_std_param = None
+    else:
+      self.std_w = None
+      self.std_bias = None
+      self.log_std_param = nn.Parameter(
+        torch.log(torch.full((action_dim,), init_std, dtype=torch.float32))
+      )
+    self.squash_output = squash_output
     self.log_std_min = log_std_min
     self.log_std_max = log_std_max
 
@@ -119,10 +132,16 @@ class NormalTanhPolicy(nn.Module):
   ) -> tuple[torch.Tensor, torch.Tensor]:
     del training
     mean = F.linear(x, self.mean_w.w.weight, self.mean_bias)
-    raw_log_std = F.linear(x, self.std_w.w.weight, self.std_bias)
-    log_std = self.log_std_min + (self.log_std_max - self.log_std_min) * 0.5 * (
-      1 + torch.tanh(raw_log_std)
-    )
+    if self.state_dependent_std:
+      assert self.std_w is not None
+      assert self.std_bias is not None
+      raw_log_std = F.linear(x, self.std_w.w.weight, self.std_bias)
+      log_std = self.log_std_min + (self.log_std_max - self.log_std_min) * 0.5 * (
+        1 + torch.tanh(raw_log_std)
+      )
+    else:
+      assert self.log_std_param is not None
+      log_std = self.log_std_param.expand_as(mean)
     return mean, torch.exp(log_std)
 
   def forward(
@@ -131,9 +150,13 @@ class NormalTanhPolicy(nn.Module):
     mean, std = self.get_mean_and_std(x, training)
     dist = torch.distributions.Normal(mean, std)
     raw_action = dist.rsample()
-    tanh_action = torch.tanh(raw_action)
-    log_prob = dist.log_prob(raw_action) - safe_tanh_log_det_jacobian(raw_action)
-    return tanh_action, {"log_prob": log_prob.sum(1)}
+    if self.squash_output:
+      action = torch.tanh(raw_action)
+      log_prob = dist.log_prob(raw_action) - safe_tanh_log_det_jacobian(raw_action)
+    else:
+      action = raw_action
+      log_prob = dist.log_prob(raw_action)
+    return action, {"log_prob": log_prob.sum(1)}
 
 
 class EnsembleUnitLinear(nn.Module):

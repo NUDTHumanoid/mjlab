@@ -18,12 +18,15 @@ def _write_keypoints(path: Path, *, frame_count: int = 4, keypoints: int = 18) -
   orientations = np.tile(np.eye(3, dtype=np.float32), (frame_count, keypoints, 1, 1))
   np.save(
     path,
-    {
-      "positions": np.zeros((frame_count, keypoints, 3), dtype=np.float32),
-      "orientations": orientations,
-      "left_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
-      "right_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
-    },
+    np.array(
+      {
+        "positions": np.zeros((frame_count, keypoints, 3), dtype=np.float32),
+        "orientations": orientations,
+        "left_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
+        "right_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
+      },
+      dtype=object,
+    ),
   )
 
 
@@ -39,15 +42,22 @@ def _make_protomotions_root(root: Path) -> None:
     "#!/usr/bin/env python3\n",
     encoding="utf-8",
   )
-  (root / "protomotions" / "data" / "assets" / "urdf" / "for_retargeting" / "g1.urdf").write_text(
+  (
+    root / "protomotions" / "data" / "assets" / "urdf" / "for_retargeting" / "g1.urdf"
+  ).write_text(
     "<robot />\n",
     encoding="utf-8",
   )
 
 
-def test_retarget_smpl_keypoints_to_g1_npz_rejects_missing_required_key(tmp_path: Path) -> None:
+def test_retarget_smpl_keypoints_to_g1_npz_rejects_missing_required_key(
+  tmp_path: Path,
+) -> None:
   keypoint_path = tmp_path / "keypoints.npy"
-  np.save(keypoint_path, {"positions": np.zeros((2, 18, 3), dtype=np.float32)})
+  np.save(
+    keypoint_path,
+    np.array({"positions": np.zeros((2, 18, 3), dtype=np.float32)}, dtype=object),
+  )
 
   with pytest.raises(KeyError, match="orientations"):
     retarget_smpl_keypoints_to_g1_npz(
@@ -93,7 +103,9 @@ def test_retarget_smpl_keypoints_to_g1_npz_runs_and_writes_manifest(
     np.savez_compressed(
       output_dir / f"{staged_input.stem}_retargeted.npz",
       base_frame_pos=np.zeros((4, 3), dtype=np.float32),
-      base_frame_wxyz=np.tile(np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (4, 1)),
+      base_frame_wxyz=np.tile(
+        np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (4, 1)
+      ),
       joint_angles=np.zeros((4, 29), dtype=np.float32),
     )
     return subprocess.CompletedProcess(cmd, 0)

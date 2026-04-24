@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -14,7 +14,7 @@ import yaml
 import mjlab.scripts.play as play_mod
 import mjlab.scripts.train as train_mod
 import mjlab.tasks.tracking.scripts.evaluate as evaluate_mod
-from mjlab.envs import ManagerBasedRlEnv
+from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.flashsac.adapter import MjlabFlashSACEnvAdapter
 from mjlab.flashsac.agent import FlashSACAgent
 from mjlab.flashsac.config import (
@@ -23,11 +23,18 @@ from mjlab.flashsac.config import (
   FLASHSAC_TRACKING_NUM_ENVS,
   FLASHSAC_TRACKING_TOTAL_ENV_STEPS,
   FLASHSAC_TRACKING_UPSTREAM_INTERACTION_STEPS,
+  FLASHSAC_VELOCITY_BUFFER_MAX_LENGTH,
+  FLASHSAC_VELOCITY_BUFFER_MIN_LENGTH,
+  FLASHSAC_VELOCITY_N_STEP,
+  FLASHSAC_VELOCITY_NUM_ENVS,
+  FLASHSAC_VELOCITY_TOTAL_ENV_STEPS,
+  FLASHSAC_VELOCITY_UPDATES_PER_INTERACTION_STEP,
   FlashSACRunnerCfg,
   FlashSACTrainConfig,
   apply_flashsac_tracking_train_overrides,
   maybe_recompute_flashsac_tracking_checkpoint_cadence,
 )
+from mjlab.flashsac.network import FlashSACActor
 from mjlab.flashsac.runtime import (
   apply_flashsac_tracking_inference_overrides,
   load_flashsac_runner_cfg,
@@ -76,6 +83,9 @@ def test_flashsac_tracking_train_config_uses_stronger_defaults() -> None:
   assert cfg.agent.save_final_replay_buffer is False
   assert cfg.agent.normalize_observation is False
   assert cfg.agent.asymmetric_observation is False
+  assert cfg.agent.squash_actions is False
+  assert cfg.agent.actor_state_dependent_std is False
+  assert cfg.agent.actor_init_std == cfg.agent.temp_target_sigma
   assert (
     cfg.agent.save_checkpoint_per_interaction_step
     == checkpoint_interval_from_total_env_steps(
@@ -106,6 +116,29 @@ def test_flashsac_tracking_train_config_uses_stronger_defaults() -> None:
     cfg.env.terminations["anchor_ori"].params["threshold"]
     == baseline_env_cfg.terminations["anchor_ori"].params["threshold"]
   )
+
+
+def test_flashsac_velocity_train_config_uses_verified_recipe_defaults() -> None:
+  cfg = FlashSACTrainConfig.from_task("Mjlab-Velocity-Flat-Unitree-G1")
+  baseline_env_cfg = load_env_cfg("Mjlab-Velocity-Flat-Unitree-G1", play=False)
+
+  assert cfg.env.scene.num_envs == FLASHSAC_VELOCITY_NUM_ENVS
+  assert cfg.agent.num_env_steps == FLASHSAC_VELOCITY_TOTAL_ENV_STEPS
+  assert (
+    cfg.agent.updates_per_interaction_step
+    == FLASHSAC_VELOCITY_UPDATES_PER_INTERACTION_STEP
+  )
+  assert cfg.agent.n_step == FLASHSAC_VELOCITY_N_STEP
+  assert cfg.agent.buffer_min_length == FLASHSAC_VELOCITY_BUFFER_MIN_LENGTH
+  assert cfg.agent.buffer_max_length == FLASHSAC_VELOCITY_BUFFER_MAX_LENGTH
+  assert cfg.agent.normalize_observation is False
+  assert cfg.agent.asymmetric_observation is True
+  assert cfg.agent.squash_actions is True
+  assert cfg.agent.actor_state_dependent_std is True
+  assert cfg.agent.actor_init_std == 1.0
+  assert "twist" in cfg.env.commands
+  assert set(cfg.env.events) == set(baseline_env_cfg.events)
+  assert set(cfg.env.terminations) == set(baseline_env_cfg.terminations)
 
 
 def test_train_main_routes_flashsac_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -388,6 +421,105 @@ def test_make_flashsac_inference_cfg_preserves_explicit_cuda_device() -> None:
   assert inference_cfg.buffer_device_type == "cuda:1"
 
 
+def test_flashsac_agent_deterministic_actions_can_be_unsquashed() -> None:
+  cfg = FlashSACRunnerCfg(
+    device_type="cpu",
+    buffer_device_type="cpu",
+    use_compile=False,
+    use_amp=False,
+    squash_actions=False,
+  )
+  agent = FlashSACAgent(
+    observation_dim=4,
+    action_dim=2,
+    actor_observation_dim=4,
+    cfg=cfg,
+  )
+  cast(Any, agent.actor).apply = lambda *args, **kwargs: (
+    torch.full((1, 2), 2.0, dtype=torch.float32),
+    torch.ones((1, 2), dtype=torch.float32),
+  )
+
+  actions = agent._sample_actions(torch.zeros((1, 4), dtype=torch.float32), 0.0)
+
+  assert torch.allclose(actions, torch.tensor([[2.0, 2.0]], dtype=torch.float32))
+
+
+def test_unsquashed_flashsac_actor_and_agent_can_emit_actions_beyond_unit_interval() -> (
+  None
+):
+  actor = FlashSACActor(
+    num_blocks=0,
+    input_dim=3,
+    hidden_dim=4,
+    action_dim=2,
+    squash_actions=False,
+    state_dependent_std=False,
+    init_std=0.2,
+  )
+  actor.predictor.mean_bias.data.fill_(2.0)
+  assert actor.predictor.log_std_param is not None
+  actor.predictor.log_std_param.data.fill_(-20.0)
+  actions, _ = actor(torch.zeros((1, 3), dtype=torch.float32), training=False)
+  assert torch.all(actions > 1.0)
+
+  cfg = FlashSACRunnerCfg(
+    device_type="cpu",
+    buffer_device_type="cpu",
+    use_compile=False,
+    use_amp=False,
+    normalize_reward=False,
+    squash_actions=False,
+    actor_state_dependent_std=False,
+    actor_init_std=0.2,
+  )
+  agent = FlashSACAgent(
+    observation_dim=3,
+    action_dim=2,
+    actor_observation_dim=3,
+    cfg=cfg,
+  )
+  actor_module = cast(
+    FlashSACActor,
+    agent.actor.network._orig_mod
+    if hasattr(agent.actor.network, "_orig_mod")
+    else agent.actor.network,
+  )
+  actor_module.predictor.mean_bias.data.fill_(1.5)
+  assert actor_module.predictor.log_std_param is not None
+  actor_module.predictor.log_std_param.data.fill_(-20.0)
+  sampled = agent.sample_actions(
+    interaction_step=0,
+    prev_transition={"next_observation": np.zeros((1, 3), dtype=np.float32)},
+    training=False,
+  )
+  assert sampled.shape == (1, 2)
+  assert np.all(sampled > 1.0)
+
+
+def test_flashsac_tracking_defaults_use_state_independent_std() -> None:
+  cfg = FlashSACTrainConfig.from_task("Mjlab-Tracking-Flat-Unitree-G1-Acrobatics")
+  assert cfg.agent.squash_actions is False
+  assert cfg.agent.actor_state_dependent_std is False
+  assert cfg.agent.actor_init_std == cfg.agent.temp_target_sigma
+
+
+def test_state_independent_std_policy_uses_global_std_parameter() -> None:
+  actor = FlashSACActor(
+    num_blocks=0,
+    input_dim=3,
+    hidden_dim=4,
+    action_dim=2,
+    squash_actions=False,
+    state_dependent_std=False,
+    init_std=0.2,
+  )
+  _, std = actor.get_mean_and_std(
+    torch.zeros((3, 3), dtype=torch.float32), training=False
+  )
+  assert torch.allclose(std, torch.full((3, 2), 0.2, dtype=torch.float32))
+
+
 def test_observation_normalizer_roundtrip(tmp_path: Path) -> None:
   normalizer = ObservationNormalizer(shape=(2,), device=torch.device("cpu"))
   normalizer.update(torch.tensor([[1.0, 3.0], [3.0, 5.0]], dtype=torch.float32))
@@ -480,6 +612,9 @@ def test_apply_resume_agent_contract_restores_architecture_shaping_flags(
         "observation_clip_value": 3.0,
         "normalized_G_max": 9.0,
         "asymmetric_observation": True,
+        "squash_actions": False,
+        "actor_state_dependent_std": False,
+        "actor_init_std": 0.15,
         "actor_num_blocks": 3,
         "actor_hidden_dim": 96,
         "critic_num_blocks": 4,
@@ -494,6 +629,9 @@ def test_apply_resume_agent_contract_restores_architecture_shaping_flags(
     observation_clip_value=10.0,
     normalized_G_max=5.0,
     asymmetric_observation=False,
+    squash_actions=True,
+    actor_state_dependent_std=True,
+    actor_init_std=1.0,
     actor_num_blocks=2,
     actor_hidden_dim=128,
     critic_num_blocks=2,
@@ -511,6 +649,9 @@ def test_apply_resume_agent_contract_restores_architecture_shaping_flags(
   assert resumed_cfg.observation_clip_value == 3.0
   assert resumed_cfg.normalized_G_max == 9.0
   assert resumed_cfg.asymmetric_observation is True
+  assert resumed_cfg.squash_actions is False
+  assert resumed_cfg.actor_state_dependent_std is False
+  assert resumed_cfg.actor_init_std == 0.15
   assert resumed_cfg.actor_num_blocks == 3
   assert resumed_cfg.actor_hidden_dim == 96
   assert resumed_cfg.critic_num_blocks == 4
@@ -849,7 +990,7 @@ def test_flashsac_evaluate_preserves_checkpoint_semantics_when_parity_exists(
       "cpu",
     )
 
-  env_cfg = cast(object, captured["env_cfg"])
+  env_cfg = cast(ManagerBasedRlEnvCfg, captured["env_cfg"])
   motion_cmd = env_cfg.commands["motion"]
   assert isinstance(motion_cmd, MotionCommandCfg)
   assert motion_cmd.sampling_mode == "adaptive"
@@ -892,7 +1033,7 @@ def test_flashsac_evaluate_uses_deterministic_fallback_without_parity(
       "cpu",
     )
 
-  env_cfg = cast(object, captured["env_cfg"])
+  env_cfg = cast(ManagerBasedRlEnvCfg, captured["env_cfg"])
   motion_cmd = env_cfg.commands["motion"]
   assert isinstance(motion_cmd, MotionCommandCfg)
   assert motion_cmd.sampling_mode == "start"
@@ -989,6 +1130,47 @@ def test_resolve_rsl_rl_motion_file_can_resolve_from_wandb(
     "wandb_run_path": "entity/project/run123",
     "checkpoint_file": None,
   }
+
+
+def test_rsl_rl_evaluate_passes_runner_cfg_as_dict(
+  tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  checkpoint_path = tmp_path / "model_123.pt"
+  checkpoint_path.write_bytes(b"checkpoint")
+  motion_file = tmp_path / "motion.npz"
+  motion_file.write_bytes(b"motion")
+
+  class StopEval(RuntimeError):
+    pass
+
+  class FakeEnv:
+    def __init__(self, *, cfg, device: str) -> None:
+      del cfg, device
+
+  class FakeRunner:
+    def __init__(self, env, train_cfg, log_dir=None, device: str = "cpu") -> None:
+      del env, log_dir, device
+      assert isinstance(train_cfg, dict)
+      assert train_cfg["experiment_name"] == "g1_tracking"
+      raise StopEval()
+
+  monkeypatch.setattr(evaluate_mod, "ManagerBasedRlEnv", FakeEnv)
+  monkeypatch.setattr(evaluate_mod, "RslRlVecEnvWrapper", lambda env, clip_actions: env)
+  monkeypatch.setattr(evaluate_mod, "load_runner_cls", lambda task_id: FakeRunner)
+  monkeypatch.setattr(
+    evaluate_mod, "apply_rsl_rl_checkpoint_env_parity", lambda env_cfg, checkpoint: None
+  )
+
+  with pytest.raises(StopEval):
+    evaluate_mod._run_rsl_rl_evaluate(
+      "Mjlab-Tracking-Flat-Unitree-G1",
+      EvaluateConfig(
+        checkpoint_file=str(checkpoint_path),
+        motion_file=str(motion_file),
+        num_envs=4,
+      ),
+      "cpu",
+    )
 
 
 def test_flashsac_final_obs_with_history_differs_from_reset_obs(

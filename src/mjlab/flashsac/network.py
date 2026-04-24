@@ -18,12 +18,27 @@ from mjlab.flashsac.layers import (
 
 
 class FlashSACActor(nn.Module):
-  def __init__(self, num_blocks: int, input_dim: int, hidden_dim: int, action_dim: int):
+  def __init__(
+    self,
+    num_blocks: int,
+    input_dim: int,
+    hidden_dim: int,
+    action_dim: int,
+    squash_actions: bool = True,
+    state_dependent_std: bool = True,
+    init_std: float = 1.0,
+  ):
     super().__init__()
     self.embedder = FlashSACEmbedder(input_dim=input_dim, hidden_dim=hidden_dim)
     self.encoder = nn.ModuleList([FlashSACBlock(hidden_dim) for _ in range(num_blocks)])
     self.post_norm = UnitRMSNorm(hidden_dim)
-    self.predictor = NormalTanhPolicy(hidden_dim=hidden_dim, action_dim=action_dim)
+    self.predictor = NormalTanhPolicy(
+      hidden_dim=hidden_dim,
+      action_dim=action_dim,
+      squash_output=squash_actions,
+      state_dependent_std=state_dependent_std,
+      init_std=init_std,
+    )
 
   def get_mean_and_std(
     self, observations: torch.Tensor, training: bool

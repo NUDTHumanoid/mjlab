@@ -18,9 +18,9 @@ from mjlab.scripts.debug_robot import (
   ManualDeltaPolicy,
   RobotDebugSession,
   apply_pose_delta,
+  build_manual_delta_policy,
   build_robot_mode_summary,
   build_task_mode_summary,
-  build_manual_delta_policy,
 )
 from mjlab.viewer.viser.debug_panels import (
   build_actuator_inventory_from_cfg,
@@ -151,9 +151,7 @@ def test_apply_pose_delta_clamps_to_joint_limits(device: str) -> None:
 def test_apply_pose_delta_zeros_selected_joint_velocity(device: str) -> None:
   """Pose browser should clear joint velocity before forwarding the new pose."""
   session = make_robot_session(device)
-  session.entity.write_joint_velocity_to_sim(
-    torch.tensor([[1.0, -2.0]], device=device)
-  )
+  session.entity.write_joint_velocity_to_sim(torch.tensor([[1.0, -2.0]], device=device))
   session.sim.forward()
 
   apply_pose_delta(session, joint_index=1, delta=0.1, clamp=True)

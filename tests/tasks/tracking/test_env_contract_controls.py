@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import torch
 
+from mjlab.envs import ManagerBasedRlEnv
 from mjlab.tasks.tracking.mdp.metrics import (
   compute_anchor_height_error,
   compute_anchor_planar_position_error,
@@ -97,7 +98,7 @@ def test_mean_body_height_metric_can_scope_to_selected_bodies() -> None:
 
 
 def test_env_contract_control_terminations_distinguish_any_vs_mean_thresholds() -> None:
-  env: Any = _FakeEnv(_make_command())
+  env = cast(ManagerBasedRlEnv, _FakeEnv(_make_command()))
 
   planar_failure = bad_anchor_pos_xy_only(env, "motion", threshold=3.0)
   body_mean_failure = bad_motion_body_mean_pos(env, "motion", threshold=2.4)
@@ -113,7 +114,7 @@ def test_env_contract_control_terminations_distinguish_any_vs_mean_thresholds() 
 def test_env_contract_control_rewards_provide_smooth_planar_and_height_signals() -> (
   None
 ):
-  env: Any = _FakeEnv(_make_command())
+  env = cast(ManagerBasedRlEnv, _FakeEnv(_make_command()))
 
   planar_reward = motion_global_anchor_planar_position_error_exp(env, "motion", std=2.0)
   height_reward = motion_relative_body_height_error_exp(env, "motion", std=2.0)

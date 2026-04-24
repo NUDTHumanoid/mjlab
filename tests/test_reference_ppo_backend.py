@@ -82,7 +82,9 @@ def test_train_main_routes_reference_ppo_backend(
     routed["args"] = args
 
   def fail_other_launch(*args, **kwargs) -> None:
-    raise AssertionError("other backends should not be called for --backend reference_ppo")
+    raise AssertionError(
+      "other backends should not be called for --backend reference_ppo"
+    )
 
   monkeypatch.setattr(
     train_mod, "launch_reference_ppo_training", fake_reference_ppo_launch

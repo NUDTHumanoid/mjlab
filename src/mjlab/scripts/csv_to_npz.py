@@ -25,8 +25,8 @@ class MotionLoader:
   def __init__(
     self,
     motion_file: str,
-    input_fps: int,
-    output_fps: int,
+    input_fps: float,
+    output_fps: float,
     device: torch.device | str,
     line_range: tuple[int, int] | None = None,
   ):
@@ -184,17 +184,17 @@ class MotionLoader:
 def run_sim(
   sim: Simulation,
   scene: Scene,
-  joint_names,
-  input_file,
-  input_fps,
-  output_fps,
-  output_name,
-  output_file,
-  skip_wandb,
-  render,
-  line_range,
+  joint_names: list[str],
+  input_file: str,
+  input_fps: float,
+  output_fps: float,
+  output_name: str,
+  output_file: str,
+  skip_wandb: bool,
+  render: bool,
+  line_range: tuple[int, int] | None,
   renderer: OffscreenRenderer | None = None,
-):
+) -> Path:
   motion = MotionLoader(
     motion_file=input_file,
     input_fps=input_fps,
@@ -342,6 +342,8 @@ def run_sim(
           wandb.finish()
 
         return output_path
+
+  raise RuntimeError("Motion conversion finished without saving an output file.")
 
 
 def convert_csv_to_motion_npz(

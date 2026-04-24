@@ -82,12 +82,16 @@ def _joint_ctrl_index_map(entity: Entity) -> dict[str, int]:
   for act in entity.actuators:
     if act.transmission_type != TransmissionType.JOINT:
       continue
-    for joint_name, ctrl_idx in zip(act.target_names, act.ctrl_ids.tolist()):
+    for joint_name, ctrl_idx in zip(
+      act.target_names, act.ctrl_ids.tolist(), strict=False
+    ):
       mapping[joint_name] = int(ctrl_idx)
   return mapping
 
 
-def build_actuator_inventory_from_cfg(entity_cfg: EntityCfg) -> list[ActuatorInventoryRow]:
+def build_actuator_inventory_from_cfg(
+  entity_cfg: EntityCfg,
+) -> list[ActuatorInventoryRow]:
   """Build grouped actuator inventory rows from an entity config."""
   entity = Entity(entity_cfg)
   rows: list[ActuatorInventoryRow] = []
@@ -150,7 +154,9 @@ def build_control_chain_rows(
   processed_action: torch.Tensor = action_term.processed_action[env_idx]
 
   rows: list[ControlChainRow] = []
-  for action_idx, (joint_idx, joint_name) in enumerate(zip(target_ids, target_names)):
+  for action_idx, (joint_idx, joint_name) in enumerate(
+    zip(target_ids, target_names, strict=False)
+  ):
     ctrl_idx = joint_ctrl_map.get(joint_name)
     actuator_force = None
     if ctrl_idx is not None:

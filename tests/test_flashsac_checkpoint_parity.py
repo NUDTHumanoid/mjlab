@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import mjlab.tasks  # noqa: F401
-from mjlab.tasks.registry import load_env_cfg
-from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.flashsac.runtime import (
   apply_flashsac_checkpoint_env_parity,
   maybe_load_flashsac_checkpoint_env_parity,
   render_flashsac_checkpoint_env_parity_audit,
   resolve_tracking_motion_file,
 )
+from mjlab.tasks.registry import load_env_cfg
+from mjlab.tasks.tracking.mdp import MotionCommandCfg
 
 
 def _write_flashsac_env_yaml(

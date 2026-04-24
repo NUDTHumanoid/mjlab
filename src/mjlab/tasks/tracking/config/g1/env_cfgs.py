@@ -150,5 +150,6 @@ def unitree_g1_flat_acrobatics_env_cfg(
   if not play:
     cfg.episode_length_s = 15.0
     cfg.sim.nconmax = 80
+    cfg.sim.njmax = 300
 
   return cfg

@@ -27,7 +27,9 @@ def _sanitize_stem(stem: str) -> str:
   return sanitized or "motion"
 
 
-def _validate_2d_array(name: str, array: np.ndarray, expected_cols: int | None = None) -> np.ndarray:
+def _validate_2d_array(
+  name: str, array: np.ndarray, expected_cols: int | None = None
+) -> np.ndarray:
   if array.ndim != 2:
     raise ValueError(f"{name} must be a 2D array, got shape {array.shape}.")
   if expected_cols is not None and array.shape[1] != expected_cols:
@@ -50,7 +52,9 @@ def _validate_1d_array(name: str, array: np.ndarray) -> np.ndarray:
 def _validate_scalar(name: str, value: np.ndarray | float | int) -> float:
   scalar = np.asarray(value).reshape(-1)
   if scalar.size != 1:
-    raise ValueError(f"{name} must be a scalar value, got shape {np.asarray(value).shape}.")
+    raise ValueError(
+      f"{name} must be a scalar value, got shape {np.asarray(value).shape}."
+    )
   scalar_value = float(scalar[0])
   if not np.isfinite(scalar_value):
     raise ValueError(f"{name} must be finite.")
@@ -115,6 +119,7 @@ def _validate_protomotions_root(protomotions_root: Path) -> tuple[Path, Path, Pa
       f"ProtoMotions root is missing required files: {missing_rel}."
     )
 
+  assert smpl_asset is not None
   return convert_script, extract_script, smpl_asset
 
 
@@ -126,7 +131,9 @@ def _run_proto_step(command: list[str], *, cwd: Path) -> None:
   )
   try:
     subprocess.run(command, cwd=str(cwd), check=True, env=env)
-  except subprocess.CalledProcessError as exc:  # pragma: no cover - subprocess failure path
+  except (
+    subprocess.CalledProcessError
+  ) as exc:  # pragma: no cover - subprocess failure path
     raise RuntimeError(
       f"ProtoMotions step failed with exit code {exc.returncode}: {' '.join(command)}"
     ) from exc
@@ -153,7 +160,9 @@ def _can_reuse_cached_outputs(
   protomotions_root: Path,
   output_fps: int,
 ) -> bool:
-  if not (manifest_path.is_file() and keypoint_path.is_file() and motion_path.is_file()):
+  if not (
+    manifest_path.is_file() and keypoint_path.is_file() and motion_path.is_file()
+  ):
     return False
 
   try:
@@ -164,9 +173,15 @@ def _can_reuse_cached_outputs(
   try:
     manifest_source_path = Path(manifest["source_path"]).expanduser().resolve()
     manifest_output_fps = int(manifest["output_fps"])
-    manifest_protomotions_root = Path(manifest["protomotions_root"]).expanduser().resolve()
-    manifest_keypoint_path = Path(manifest["generated_keypoint_path"]).expanduser().resolve()
-    manifest_motion_path = Path(manifest["generated_intermediate_motion_path"]).expanduser().resolve()
+    manifest_protomotions_root = (
+      Path(manifest["protomotions_root"]).expanduser().resolve()
+    )
+    manifest_keypoint_path = (
+      Path(manifest["generated_keypoint_path"]).expanduser().resolve()
+    )
+    manifest_motion_path = (
+      Path(manifest["generated_intermediate_motion_path"]).expanduser().resolve()
+    )
     manifest_source_fingerprint = manifest["source_fingerprint"]
   except (KeyError, TypeError, ValueError):
     return False
@@ -205,7 +220,9 @@ def extract_smpl_keypoints_from_raw_human_npz(
   output_path.mkdir(parents=True, exist_ok=True)
 
   raw_motion = _validate_raw_human_npz(input_path)
-  convert_script, extract_script, _ = _validate_protomotions_root(Path(protomotions_root))
+  convert_script, extract_script, _ = _validate_protomotions_root(
+    Path(protomotions_root)
+  )
 
   sanitized_stem = _sanitize_stem(input_path.stem)
   keypoint_path = output_path / f"{sanitized_stem}_keypoints.npy"
@@ -270,7 +287,9 @@ def extract_smpl_keypoints_from_raw_human_npz(
       extract_command.append("--force-remake")
     _run_proto_step(extract_command, cwd=Path(protomotions_root))
 
-    generated_keypoint_path = _find_generated_keypoint_file(extract_output_dir, generated_motion_path)
+    generated_keypoint_path = _find_generated_keypoint_file(
+      extract_output_dir, generated_motion_path
+    )
     shutil.copy2(generated_keypoint_path, keypoint_path)
 
   manifest = {
@@ -284,7 +303,9 @@ def extract_smpl_keypoints_from_raw_human_npz(
     "generated_keypoint_path": str(keypoint_path.resolve()),
     "generated_intermediate_motion_path": str(motion_path.resolve()),
   }
-  manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+  manifest_path.write_text(
+    json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+  )
 
   return {
     "keypoints_path": keypoint_path,

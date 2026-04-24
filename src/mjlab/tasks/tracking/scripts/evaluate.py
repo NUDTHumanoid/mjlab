@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
@@ -61,6 +61,41 @@ def _reduce_ee_metric_traces(
   ee_pos_mean = torch.stack(ee_pos_traces, dim=0).sum(dim=0) / active_steps
   ee_ori_mean = torch.stack(ee_ori_traces, dim=0).sum(dim=0) / active_steps
   return ee_pos_mean, ee_ori_mean
+
+
+def _termination_term_names(env_cfg) -> tuple[str, ...]:
+  return tuple(env_cfg.terminations.keys())
+
+
+def _summarize_episode_metrics(
+  *,
+  episode_returns: torch.Tensor,
+  episode_lengths: torch.Tensor,
+  step_dt: float,
+  success: torch.Tensor,
+  terminated_rate: float,
+  time_out_rate: float,
+  termination_counts: dict[str, int],
+) -> dict[str, float]:
+  episode_lengths_f = episode_lengths.to(dtype=torch.float32)
+  episode_seconds = episode_lengths_f * float(step_dt)
+  metrics: dict[str, float] = {
+    "success_rate": success.float().mean().item(),
+    "episode_return_mean": episode_returns.mean().item(),
+    "episode_return_std": episode_returns.std(unbiased=False).item(),
+    "episode_return_min": episode_returns.min().item(),
+    "episode_return_max": episode_returns.max().item(),
+    "episode_length_steps_mean": episode_lengths_f.mean().item(),
+    "episode_length_steps_std": episode_lengths_f.std(unbiased=False).item(),
+    "episode_length_seconds_mean": episode_seconds.mean().item(),
+    "episode_length_seconds_std": episode_seconds.std(unbiased=False).item(),
+    "terminated_rate": terminated_rate,
+    "time_out_rate": time_out_rate,
+  }
+  num_episodes = max(int(episode_returns.numel()), 1)
+  for term_name, count in termination_counts.items():
+    metrics[f"termination_rate_{term_name}"] = float(count) / float(num_episodes)
+  return metrics
 
 
 @dataclass(frozen=True)
@@ -170,7 +205,7 @@ def _run_rsl_rl_evaluate(
     )
 
   runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-  runner = runner_cls(env, agent_cfg, device=device)
+  runner = runner_cls(env, asdict(agent_cfg), device=device)
   runner.load(str(resume_path), map_location=device)
   policy = runner.get_inference_policy(device=device)
 
@@ -185,6 +220,13 @@ def _run_rsl_rl_evaluate(
   all_ee_pos_error: list[torch.Tensor] = []
   all_ee_ori_error: list[torch.Tensor] = []
   active_masks: list[torch.Tensor] = []
+  termination_counts = {term_name: 0 for term_name in _termination_term_names(env_cfg)}
+  episode_returns = torch.zeros(cfg.num_envs, dtype=torch.float32, device=device)
+  episode_lengths = torch.zeros(cfg.num_envs, dtype=torch.int64, device=device)
+  completed_returns = torch.zeros(cfg.num_envs, dtype=torch.float32, device=device)
+  completed_lengths = torch.zeros(cfg.num_envs, dtype=torch.int64, device=device)
+  terminated_episode_count = 0
+  time_out_episode_count = 0
 
   done_envs = torch.zeros(cfg.num_envs, dtype=torch.bool, device=device)
   success = torch.zeros(cfg.num_envs, dtype=torch.bool, device=device)
@@ -198,11 +240,13 @@ def _run_rsl_rl_evaluate(
   while not done_envs.all():
     with torch.no_grad():
       actions = policy(obs)
-    obs, _, dones, _ = env.step(actions)
+    obs, rewards, dones, _ = env.step(actions)
 
     # Compute metrics for active envs.
     active = ~done_envs
     if active.any():
+      episode_returns[active] += rewards[active]
+      episode_lengths[active] += 1
       active_masks.append(active.float())
       all_mpkpe.append(torch.where(active, compute_mpkpe(command), 0.0))
       all_r_mpkpe.append(torch.where(active, compute_root_relative_mpkpe(command), 0.0))
@@ -224,6 +268,16 @@ def _run_rsl_rl_evaluate(
 
     if newly_done.any():
       success = success | (newly_done & truncated & ~terminated)
+      completed_returns[newly_done] = episode_returns[newly_done]
+      completed_lengths[newly_done] = episode_lengths[newly_done]
+      terminated_episode_count += int((newly_done & terminated).sum().item())
+      time_out_episode_count += int((newly_done & truncated).sum().item())
+      for term_name in termination_counts:
+        termination_counts[term_name] += int(
+          (newly_done & env.unwrapped.termination_manager.get_term(term_name))
+          .sum()
+          .item()
+        )
       done_envs = done_envs | newly_done
       print(
         f"[INFO] {done_envs.sum().item()}/{cfg.num_envs} episodes completed "
@@ -239,13 +293,23 @@ def _run_rsl_rl_evaluate(
   )
 
   metrics = {
-    "success_rate": success.float().mean().item(),
     "mpkpe": means[0].mean().item(),
     "r_mpkpe": means[1].mean().item(),
     "joint_vel_error": means[2].mean().item(),
     "ee_pos_error": float("nan"),
     "ee_ori_error": float("nan"),
   }
+  metrics.update(
+    _summarize_episode_metrics(
+      episode_returns=completed_returns,
+      episode_lengths=completed_lengths,
+      step_dt=env.unwrapped.step_dt,
+      success=success,
+      terminated_rate=float(terminated_episode_count) / float(cfg.num_envs),
+      time_out_rate=float(time_out_episode_count) / float(cfg.num_envs),
+      termination_counts=termination_counts,
+    )
+  )
   if ee_body_names and all_ee_pos_error and all_ee_ori_error:
     ee_pos_mean, ee_ori_mean = _reduce_ee_metric_traces(
       all_ee_pos_error,
@@ -317,6 +381,13 @@ def _run_flashsac_evaluate(
   all_ee_pos_error: list[torch.Tensor] = []
   all_ee_ori_error: list[torch.Tensor] = []
   active_masks: list[torch.Tensor] = []
+  termination_counts = {term_name: 0 for term_name in _termination_term_names(env_cfg)}
+  episode_returns = torch.zeros(cfg.num_envs, dtype=torch.float32, device=device)
+  episode_lengths = torch.zeros(cfg.num_envs, dtype=torch.int64, device=device)
+  completed_returns = torch.zeros(cfg.num_envs, dtype=torch.float32, device=device)
+  completed_lengths = torch.zeros(cfg.num_envs, dtype=torch.int64, device=device)
+  terminated_episode_count = 0
+  time_out_episode_count = 0
 
   done_envs = torch.zeros(cfg.num_envs, dtype=torch.bool, device=device)
   success = torch.zeros(cfg.num_envs, dtype=torch.bool, device=device)
@@ -330,11 +401,13 @@ def _run_flashsac_evaluate(
   while not done_envs.all():
     with torch.no_grad():
       actions = policy(obs)
-    obs, _, terminated, truncated, _ = env.step(actions)
+    obs, rewards, terminated, truncated, _ = env.step(actions)
     dones = terminated | truncated
 
     active = ~done_envs
     if active.any():
+      episode_returns[active] += rewards[active]
+      episode_lengths[active] += 1
       active_masks.append(active.float())
       all_mpkpe.append(torch.where(active, compute_mpkpe(command), 0.0))
       all_r_mpkpe.append(torch.where(active, compute_root_relative_mpkpe(command), 0.0))
@@ -352,6 +425,14 @@ def _run_flashsac_evaluate(
     newly_done = dones.bool() & ~done_envs
     if newly_done.any():
       success = success | (newly_done & truncated & ~terminated)
+      completed_returns[newly_done] = episode_returns[newly_done]
+      completed_lengths[newly_done] = episode_lengths[newly_done]
+      terminated_episode_count += int((newly_done & terminated).sum().item())
+      time_out_episode_count += int((newly_done & truncated).sum().item())
+      for term_name in termination_counts:
+        termination_counts[term_name] += int(
+          (newly_done & env.termination_manager.get_term(term_name)).sum().item()
+        )
       done_envs = done_envs | newly_done
       print(
         f"[INFO] {done_envs.sum().item()}/{cfg.num_envs} episodes completed "
@@ -365,13 +446,23 @@ def _run_flashsac_evaluate(
     active_masks,
   )
   metrics = {
-    "success_rate": success.float().mean().item(),
     "mpkpe": means[0].mean().item(),
     "r_mpkpe": means[1].mean().item(),
     "joint_vel_error": means[2].mean().item(),
     "ee_pos_error": float("nan"),
     "ee_ori_error": float("nan"),
   }
+  metrics.update(
+    _summarize_episode_metrics(
+      episode_returns=completed_returns,
+      episode_lengths=completed_lengths,
+      step_dt=env.step_dt,
+      success=success,
+      terminated_rate=float(terminated_episode_count) / float(cfg.num_envs),
+      time_out_rate=float(time_out_episode_count) / float(cfg.num_envs),
+      termination_counts=termination_counts,
+    )
+  )
   if ee_body_names and all_ee_pos_error and all_ee_ori_error:
     ee_pos_mean, ee_ori_mean = _reduce_ee_metric_traces(
       all_ee_pos_error,

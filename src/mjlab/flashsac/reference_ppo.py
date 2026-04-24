@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import random
 from dataclasses import asdict, dataclass, field
@@ -12,8 +11,8 @@ from typing import Any, Literal, cast
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch import nn
 from rsl_rl.modules.normalization import EmpiricalNormalization
+from torch import nn
 
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.flashsac.trainer import (
@@ -166,9 +165,7 @@ class GaussianActor(nn.Module):
     if std_type == "scalar":
       self.std_param = nn.Parameter(torch.full((action_dim,), init_std))
     elif std_type == "log":
-      self.log_std_param = nn.Parameter(
-        torch.log(torch.full((action_dim,), init_std))
-      )
+      self.log_std_param = nn.Parameter(torch.log(torch.full((action_dim,), init_std)))
     else:
       raise ValueError(f"Unsupported std_type for reference_ppo: {std_type!r}")
 
@@ -362,9 +359,7 @@ class ReferencePpoTrainConfig:
       schedule = getattr(algorithm_cfg, "schedule", None)
       if schedule in ("adaptive", "fixed"):
         agent_cfg.schedule = schedule
-      use_clipped_value_loss = getattr(
-        algorithm_cfg, "use_clipped_value_loss", None
-      )
+      use_clipped_value_loss = getattr(algorithm_cfg, "use_clipped_value_loss", None)
       if use_clipped_value_loss is not None:
         agent_cfg.use_clipped_value_loss = bool(use_clipped_value_loss)
     return ReferencePpoTrainConfig(env=env_cfg, agent=agent_cfg)
@@ -572,9 +567,11 @@ class ReferencePpoAgent:
           with torch.no_grad():
             old_mean = old_means[index]
             old_std = old_stds[index]
-            kl = torch.log(std / old_std) + (
-              old_std.pow(2) + (old_mean - mean).pow(2)
-            ) / (2.0 * std.pow(2)) - 0.5
+            kl = (
+              torch.log(std / old_std)
+              + (old_std.pow(2) + (old_mean - mean).pow(2)) / (2.0 * std.pow(2))
+              - 0.5
+            )
             self._apply_adaptive_lr(kl.sum(dim=-1).mean())
         ratio = (new_log_prob - old_log_probs[index]).exp()
         unclipped = -advantages[index] * ratio
@@ -584,9 +581,9 @@ class ReferencePpoAgent:
         policy_loss = torch.maximum(unclipped, clipped).mean()
         value = self.critic(critic_observations[index])
         if self.cfg.use_clipped_value_loss:
-          value_clipped = old_values[index] + (
-            value - old_values[index]
-          ).clamp(-self.cfg.clip_coef, self.cfg.clip_coef)
+          value_clipped = old_values[index] + (value - old_values[index]).clamp(
+            -self.cfg.clip_coef, self.cfg.clip_coef
+          )
           value_losses = (value - returns[index]).pow(2)
           value_losses_clipped = (value_clipped - returns[index]).pow(2)
           value_loss = torch.maximum(value_losses, value_losses_clipped).mean()
@@ -666,8 +663,10 @@ def run_reference_ppo_train(
 
   env = ManagerBasedRlEnv(cfg=cfg.env, device=device)
   observation_space = env.single_observation_space
-  actor_key = "actor" if "actor" in observation_space.spaces else next(
-    iter(observation_space.spaces)
+  actor_key = (
+    "actor"
+    if "actor" in observation_space.spaces
+    else next(iter(observation_space.spaces))
   )
   critic_key = "critic" if "critic" in observation_space.spaces else actor_key
   actor_dim = observation_space.spaces[actor_key].shape[-1]
@@ -723,7 +722,9 @@ def run_reference_ppo_train(
   logging_every = cfg.agent.logging_per_interaction_step or _default_logging_interval(
     num_interaction_steps
   )
-  checkpoint_every = cfg.agent.save_checkpoint_per_interaction_step or num_interaction_steps
+  checkpoint_every = (
+    cfg.agent.save_checkpoint_per_interaction_step or num_interaction_steps
+  )
 
   runtime_metadata: dict[str, Any] = {
     "backend": "reference_ppo",
@@ -888,7 +889,9 @@ def launch_reference_ppo_training(
   if args.gpu_ids == "all" or (
     isinstance(args.gpu_ids, list) and len(args.gpu_ids) > 1
   ):
-    raise ValueError("Reference PPO debug backend supports only CPU/single-GPU training.")
+    raise ValueError(
+      "Reference PPO debug backend supports only CPU/single-GPU training."
+    )
   selected_gpus, num_gpus = select_gpus(
     args.gpu_ids if args.agent.device_type.startswith("cuda") else None
   )

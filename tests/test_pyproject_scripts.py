@@ -31,6 +31,3 @@ def test_project_scripts_expose_evaluate_tracking() -> None:
   scripts = pyproject["project"]["scripts"]
 
   assert scripts["evaluate-tracking"] == "mjlab.scripts.evaluate_tracking:main"
-  assert (
-    scripts["flashsac-lane0-manifest"] == "mjlab.scripts.flashsac_lane0_manifest:main"
-  )

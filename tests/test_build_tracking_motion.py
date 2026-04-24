@@ -35,12 +35,15 @@ def test_build_tracking_motion_writes_manifest_and_artifacts(
     motion_path = output_dir / "raw_motion.motion"
     np.save(
       keypoints_path,
-      {
-        "positions": np.zeros((4, 18, 3), dtype=np.float32),
-        "orientations": np.tile(np.eye(3, dtype=np.float32), (4, 18, 1, 1)),
-        "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-        "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-      },
+      np.array(
+        {
+          "positions": np.zeros((4, 18, 3), dtype=np.float32),
+          "orientations": np.tile(np.eye(3, dtype=np.float32), (4, 18, 1, 1)),
+          "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
+          "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
+        },
+        dtype=object,
+      ),
     )
     manifest_path.write_text("{}\n", encoding="utf-8")
     motion_path.write_text("motion\n", encoding="utf-8")
@@ -56,7 +59,9 @@ def test_build_tracking_motion_writes_manifest_and_artifacts(
     np.savez_compressed(
       output_path,
       base_frame_pos=np.zeros((4, 3), dtype=np.float32),
-      base_frame_wxyz=np.tile(np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (4, 1)),
+      base_frame_wxyz=np.tile(
+        np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (4, 1)
+      ),
       joint_angles=np.zeros((4, 29), dtype=np.float32),
     )
     manifest_path = output_path.with_name(f"{output_path.stem}_manifest.json")
@@ -79,13 +84,17 @@ def test_build_tracking_motion_writes_manifest_and_artifacts(
       joint_pos=np.zeros((2, 29), dtype=np.float32),
       joint_vel=np.zeros((2, 29), dtype=np.float32),
       body_pos_w=np.zeros((2, 4, 3), dtype=np.float32),
-      body_quat_w=np.tile(np.array([[[1.0, 0.0, 0.0, 0.0]]], dtype=np.float32), (2, 4, 1)),
+      body_quat_w=np.tile(
+        np.array([[[1.0, 0.0, 0.0, 0.0]]], dtype=np.float32), (2, 4, 1)
+      ),
       body_lin_vel_w=np.zeros((2, 4, 3), dtype=np.float32),
       body_ang_vel_w=np.zeros((2, 4, 3), dtype=np.float32),
     )
     return output_path.resolve()
 
-  monkeypatch.setattr(build_script, "extract_smpl_keypoints_from_raw_human_npz", fake_extract)
+  monkeypatch.setattr(
+    build_script, "extract_smpl_keypoints_from_raw_human_npz", fake_extract
+  )
   monkeypatch.setattr(build_script, "retarget_smpl_keypoints_to_g1_npz", fake_retarget)
   monkeypatch.setattr(build_script, "convert_pyroki_npz_to_csv", fake_pyroki_to_csv)
   monkeypatch.setattr(build_script, "convert_csv_to_motion_npz", fake_csv_to_motion_npz)

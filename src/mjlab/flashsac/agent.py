@@ -110,7 +110,9 @@ def _compute_lr_schedule_steps(
   learning_rate_decay_rate: float,
   num_envs: int,
 ) -> tuple[int, int]:
-  num_interaction_steps = interaction_steps_from_total_env_steps(num_env_steps, num_envs)
+  num_interaction_steps = interaction_steps_from_total_env_steps(
+    num_env_steps, num_envs
+  )
   total_update_steps = num_interaction_steps * updates_per_interaction_step
   warmup_steps = int(learning_rate_warmup_rate * total_update_steps)
   decay_steps = int(learning_rate_decay_rate * total_update_steps)
@@ -183,6 +185,9 @@ class FlashSACAgent:
       input_dim=self.actor_observation_dim,
       hidden_dim=self.cfg.actor_hidden_dim,
       action_dim=self.action_dim,
+      squash_actions=self.cfg.squash_actions,
+      state_dependent_std=self.cfg.actor_state_dependent_std,
+      init_std=self.cfg.actor_init_std,
     ).to(self.device)
     actor_optimizer = optim.Adam(
       actor_net.parameters(), lr=self.cfg.learning_rate_peak, fused=use_fused
@@ -204,7 +209,7 @@ class FlashSACAgent:
       actor_network = cast(Any, self.actor.network)
       actor_network.get_mean_and_std = torch.compile(
         actor_network.get_mean_and_std, mode=self.cfg.compile_mode
-      )  # type: ignore[attr-defined]
+      )
 
     critic_net = FlashSACDoubleCritic(
       num_blocks=self.cfg.critic_num_blocks,
@@ -325,7 +330,9 @@ class FlashSACAgent:
     for bundle in (self.actor, self.critic, self.temperature):
       if bundle.optimizer is None:
         continue
-      scheduler_state = bundle.scheduler.state_dict() if bundle.scheduler is not None else None
+      scheduler_state = (
+        bundle.scheduler.state_dict() if bundle.scheduler is not None else None
+      )
       bundle.scheduler = _build_lr_scheduler(
         bundle.optimizer,
         self.cfg,
@@ -365,7 +372,9 @@ class FlashSACAgent:
       "get_mean_and_std", observations=observations, training=False
     )
     if temperature == 0.0:
-      return torch.tanh(mean)
+      if self.cfg.squash_actions:
+        return torch.tanh(mean)
+      return mean
     reinit = (self.cur_noise_repeat_count == 0) | (
       self.cur_noise_repeat_count >= self.cur_noise_repeat_n
     )
@@ -376,7 +385,8 @@ class FlashSACAgent:
     self.cur_noise_repeat_count = torch.where(
       reinit, torch.zeros_like(self.cur_noise_repeat_count), self.cur_noise_repeat_count
     )
-    actions = torch.tanh(mean + std * self.cached_noise * temperature)
+    raw_actions = mean + std * self.cached_noise * temperature
+    actions = torch.tanh(raw_actions) if self.cfg.squash_actions else raw_actions
     self.cur_noise_repeat_count = self.cur_noise_repeat_count + 1
     return actions
 

@@ -6,6 +6,7 @@ from typing import Literal
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
+from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from mjlab.utils.training_steps import checkpoint_interval_from_total_env_steps
 
 FLASHSAC_TRACKING_UPSTREAM_INTERACTION_STEPS = 48_829
@@ -17,6 +18,15 @@ FLASHSAC_TRACKING_UPDATES_PER_INTERACTION_STEP = 2.0
 FLASHSAC_TRACKING_N_STEP = 3
 FLASHSAC_TRACKING_BUFFER_MIN_LENGTH = 100_000
 FLASHSAC_TRACKING_CHECKPOINT_COUNT = 10
+FLASHSAC_VELOCITY_UPSTREAM_INTERACTION_STEPS = 48_829
+FLASHSAC_VELOCITY_NUM_ENVS = 1024
+FLASHSAC_VELOCITY_TOTAL_ENV_STEPS = (
+  FLASHSAC_VELOCITY_UPSTREAM_INTERACTION_STEPS * FLASHSAC_VELOCITY_NUM_ENVS
+)
+FLASHSAC_VELOCITY_UPDATES_PER_INTERACTION_STEP = 2.0
+FLASHSAC_VELOCITY_N_STEP = 3
+FLASHSAC_VELOCITY_BUFFER_MIN_LENGTH = 100_000
+FLASHSAC_VELOCITY_BUFFER_MAX_LENGTH = 10_000_000
 FLASHSAC_TRACKING_DEFAULT_CHECKPOINT_INTERVAL = (
   checkpoint_interval_from_total_env_steps(
     total_env_steps=FLASHSAC_TRACKING_TOTAL_ENV_STEPS,
@@ -53,6 +63,9 @@ def apply_flashsac_tracking_runner_defaults(
   # default to symmetric observations unless a task explicitly opts into asymmetry.
   agent_cfg.normalize_observation = False
   agent_cfg.asymmetric_observation = False
+  agent_cfg.squash_actions = False
+  agent_cfg.actor_state_dependent_std = False
+  agent_cfg.actor_init_std = agent_cfg.temp_target_sigma
   agent_cfg.save_buffer_per_interaction_step = None
   agent_cfg.save_final_replay_buffer = False
   if agent_cfg.save_checkpoint_per_interaction_step is None:
@@ -63,6 +76,29 @@ def apply_flashsac_tracking_runner_defaults(
         checkpoint_count=FLASHSAC_TRACKING_CHECKPOINT_COUNT,
       )
     )
+
+
+def apply_flashsac_velocity_runner_defaults(
+  env_cfg: ManagerBasedRlEnvCfg, agent_cfg: "FlashSACRunnerCfg"
+) -> None:
+  """Restore the verified upstream-style FlashSAC recipe for velocity tasks."""
+  env_cfg.scene.num_envs = max(env_cfg.scene.num_envs, FLASHSAC_VELOCITY_NUM_ENVS)
+  agent_cfg.num_env_steps = max(
+    agent_cfg.num_env_steps, FLASHSAC_VELOCITY_TOTAL_ENV_STEPS
+  )
+  agent_cfg.updates_per_interaction_step = max(
+    agent_cfg.updates_per_interaction_step,
+    FLASHSAC_VELOCITY_UPDATES_PER_INTERACTION_STEP,
+  )
+  agent_cfg.n_step = max(agent_cfg.n_step, FLASHSAC_VELOCITY_N_STEP)
+  agent_cfg.buffer_min_length = max(
+    agent_cfg.buffer_min_length, FLASHSAC_VELOCITY_BUFFER_MIN_LENGTH
+  )
+  agent_cfg.buffer_max_length = max(
+    agent_cfg.buffer_max_length, FLASHSAC_VELOCITY_BUFFER_MAX_LENGTH
+  )
+  agent_cfg.normalize_observation = False
+  agent_cfg.asymmetric_observation = True
 
 
 def maybe_recompute_flashsac_tracking_checkpoint_cadence(
@@ -117,6 +153,9 @@ class FlashSACRunnerCfg:
   normalize_reward: bool = True
   normalized_G_max: float = 5.0
   asymmetric_observation: bool = True
+  squash_actions: bool = True
+  actor_state_dependent_std: bool = True
+  actor_init_std: float = 1.0
   device_type: str = "cuda"
   buffer_max_length: int = 1_000_000
   buffer_min_length: int = 10_000
@@ -163,6 +202,9 @@ class FlashSACTrainConfig:
     is_tracking_task = "motion" in env_cfg.commands and isinstance(
       env_cfg.commands["motion"], MotionCommandCfg
     )
+    is_velocity_task = "twist" in env_cfg.commands and isinstance(
+      env_cfg.commands["twist"], UniformVelocityCommandCfg
+    )
     agent_cfg = FlashSACRunnerCfg(
       asymmetric_observation=has_actor and has_critic,
       experiment_name=task_id.replace("Mjlab-", "").replace("-", "_").lower()
@@ -171,4 +213,6 @@ class FlashSACTrainConfig:
     if is_tracking_task:
       apply_flashsac_tracking_train_overrides(env_cfg)
       apply_flashsac_tracking_runner_defaults(env_cfg, agent_cfg)
+    elif is_velocity_task:
+      apply_flashsac_velocity_runner_defaults(env_cfg, agent_cfg)
     return FlashSACTrainConfig(env=env_cfg, agent=agent_cfg)

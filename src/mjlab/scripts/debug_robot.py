@@ -12,7 +12,11 @@ import tyro
 import viser
 
 import mjlab
-from mjlab.asset_zoo.robots import get_g1_robot_cfg, get_go1_robot_cfg, get_yam_robot_cfg
+from mjlab.asset_zoo.robots import (
+  get_g1_robot_cfg,
+  get_go1_robot_cfg,
+  get_yam_robot_cfg,
+)
 from mjlab.entity import Entity, EntityCfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
@@ -23,8 +27,8 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.viewer.viser import ViserMujocoScene
 from mjlab.viewer.viser.debug_panels import (
-  build_control_chain_rows,
   build_actuator_inventory_from_cfg,
+  build_control_chain_rows,
   build_joint_inventory,
 )
 
@@ -136,7 +140,9 @@ def _infer_batch_size(obs: Any) -> int:
   return 1
 
 
-def _resolve_action_scale(action_term: Any, action_index: int, env_idx: int = 0) -> float:
+def _resolve_action_scale(
+  action_term: Any, action_index: int, env_idx: int = 0
+) -> float:
   scale = action_term.scale
   if isinstance(scale, (float, int)):
     return float(scale)
@@ -211,9 +217,11 @@ def build_policy_controller(cfg: RobotModeConfig, session: TaskDebugSession):
   if cfg.agent == "zero":
     return HoldReferencePolicy(action_dim=action_dim, device=session.device)
   if cfg.agent == "random":
-    return lambda obs: 2 * torch.rand(
-      (_infer_batch_size(obs), action_dim), device=session.device
-    ) - 1
+    return (
+      lambda obs: 2
+      * torch.rand((_infer_batch_size(obs), action_dim), device=session.device)
+      - 1
+    )
   if cfg.agent != "trained":
     raise ValueError(f"Unsupported agent {cfg.agent!r}.")
 
@@ -621,7 +629,10 @@ class TaskDebugApp:
       ["Agent", self.cfg.agent],
       ["Control Mode", self.control_mode],
       ["Action Dim", str(self.session.action_term.action_dim)],
-      ["Selected Joint", self.session.action_term.target_names[self.selected_joint_index]],
+      [
+        "Selected Joint",
+        self.session.action_term.target_names[self.selected_joint_index],
+      ],
       ["Command", command_text or "—"],
       ["Summary", build_task_mode_summary(self.control_mode, self.cfg.agent)],
     ]

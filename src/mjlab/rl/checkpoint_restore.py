@@ -22,7 +22,9 @@ def _install_yaml_compat_aliases() -> None:
 
 
 def _restore_like(template: Any, data: Any) -> Any:
-  if is_dataclass(template) and not isinstance(template, type) and isinstance(data, dict):
+  if (
+    is_dataclass(template) and not isinstance(template, type) and isinstance(data, dict)
+  ):
     restored_obj = deepcopy(template)
     for field in fields(restored_obj):
       if field.name in data:
@@ -80,6 +82,7 @@ def load_local_rsl_rl_checkpoint_params(
     return None
 
   import mjlab.tasks  # noqa: F401
+
   _install_yaml_compat_aliases()
 
   with env_yaml.open("r", encoding="utf-8") as handle:

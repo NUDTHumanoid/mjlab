@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 def _portable_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
   if hasattr(module, "_orig_mod"):
-    orig_mod = module._orig_mod  # type: ignore[attr-defined]
+    orig_mod = module._orig_mod
     if isinstance(orig_mod, nn.Module):
       return orig_mod.state_dict()
   return module.state_dict()
@@ -88,7 +88,7 @@ class NetworkBundle:
     if compile_network:
       self.network = cast(
         nn.Module,
-        torch.compile(self.network, mode=compile_mode),  # type: ignore[arg-type]
+        torch.compile(self.network, mode=compile_mode),
       )
 
     self._weight_normalize_fn = None

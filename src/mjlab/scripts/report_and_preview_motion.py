@@ -7,7 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 import tyro
@@ -82,8 +82,8 @@ def summarize_raw_motion(input_file: str | Path) -> dict[str, object]:
     dmpls = np.asarray(motion["dmpls"], dtype=np.float64) if "dmpls" in motion else None
     gender = str(motion["gender"].item()) if "gender" in motion else None
 
-  mocap_fps = float(validated["mocap_framerate"])
-  frame_count = int(validated["frame_count"])
+  mocap_fps = float(cast(float, validated["mocap_framerate"]))
+  frame_count = int(cast(int, validated["frame_count"]))
   duration_s = frame_count / mocap_fps
 
   report: dict[str, object] = {
@@ -95,7 +95,7 @@ def summarize_raw_motion(input_file: str | Path) -> dict[str, object]:
     "frame_count": frame_count,
     "mocap_fps": mocap_fps,
     "duration_seconds": duration_s,
-    "pose_dimension": int(validated["pose_dimension"]),
+    "pose_dimension": int(cast(int, validated["pose_dimension"])),
     "gender": gender,
     "has_dmpls": dmpls is not None,
     "betas_dim": int(betas.shape[0]),

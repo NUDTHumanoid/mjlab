@@ -8,7 +8,9 @@ import tyro
 import mjlab
 
 
-def _validate_motion_array(name: str, array: np.ndarray, expected_cols: int) -> np.ndarray:
+def _validate_motion_array(
+  name: str, array: np.ndarray, expected_cols: int
+) -> np.ndarray:
   if array.ndim != 2:
     raise ValueError(f"{name} must be a 2D array, got shape {array.shape}.")
   if array.shape[1] != expected_cols:

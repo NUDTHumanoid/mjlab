@@ -28,6 +28,16 @@ def _write_raw_human_npz(path: Path, *, frame_count: int = 4, pose_dim: int = 72
   )
 
 
+def _write_keypoints_payload(path: Path, *, frame_count: int = 4) -> None:
+  payload = {
+    "positions": np.zeros((frame_count, 18, 3), dtype=np.float32),
+    "orientations": np.zeros((frame_count, 18, 3, 3), dtype=np.float32),
+    "left_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
+    "right_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
+  }
+  np.save(path, np.array(payload, dtype=object))
+
+
 def _make_protomotions_root(
   root: Path,
   *,
@@ -45,7 +55,9 @@ def _make_protomotions_root(
   assets_dir.mkdir(parents=True, exist_ok=True)
   (assets_dir / "smpl_humanoid.xml").write_text("<xml />\n", encoding="utf-8")
   if include_convert:
-    (scripts_dir / "convert_amass_to_proto.py").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    (scripts_dir / "convert_amass_to_proto.py").write_text(
+      "#!/usr/bin/env python3\n", encoding="utf-8"
+    )
   if include_extract:
     (scripts_dir / "extract_keypoints_from_single_motion.py").write_text(
       "#!/usr/bin/env python3\n", encoding="utf-8"
@@ -65,15 +77,7 @@ def _write_cached_outputs(
   manifest_path = output_dir / f"{stem}_manifest.json"
   motion_path = output_dir / f"{stem}.motion"
 
-  np.save(
-    keypoints_path,
-    {
-      "positions": np.zeros((frame_count, 18, 3), dtype=np.float32),
-      "orientations": np.zeros((frame_count, 18, 3, 3), dtype=np.float32),
-      "left_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
-      "right_foot_contacts": np.zeros((frame_count, 2), dtype=np.int32),
-    },
-  )
+  _write_keypoints_payload(keypoints_path, frame_count=frame_count)
   motion_path.write_text("cached motion\n", encoding="utf-8")
   manifest_path.write_text(
     json.dumps(
@@ -100,7 +104,9 @@ def _write_cached_outputs(
   return keypoints_path, manifest_path, motion_path
 
 
-def test_extract_smpl_keypoints_from_raw_human_npz_validates_required_keys(tmp_path: Path):
+def test_extract_smpl_keypoints_from_raw_human_npz_validates_required_keys(
+  tmp_path: Path,
+):
   """Missing AMASS-style arrays are rejected with a clear error."""
   input_file = tmp_path / "raw_motion.npz"
   np.savez(
@@ -126,7 +132,9 @@ def test_extract_smpl_keypoints_from_raw_human_npz_rejects_missing_protomotions_
   _write_raw_human_npz(input_file)
 
   protomotions_root = tmp_path / "protomotions"
-  _make_protomotions_root(protomotions_root, include_convert=False, include_extract=True)
+  _make_protomotions_root(
+    protomotions_root, include_convert=False, include_extract=True
+  )
 
   with np.testing.assert_raises_regex(FileNotFoundError, "convert_amass_to_proto.py"):
     extract_smpl_keypoints_from_raw_human_npz(
@@ -176,15 +184,7 @@ def test_extract_smpl_keypoints_from_raw_human_npz_accepts_real_protomotions_lay
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       output_path = Path(cmd[cmd.index("--output-path") + 1])
       generated = output_path / "amass_raw_motion_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((4, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((4, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-        },
-      )
+      _write_keypoints_payload(generated, frame_count=4)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)
@@ -262,15 +262,7 @@ def test_extract_smpl_keypoints_from_raw_human_npz_reruns_when_cached_manifest_m
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       output_path = Path(cmd[cmd.index("--output-path") + 1])
       generated = output_path / "amass_raw_motion_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((4, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((4, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-        },
-      )
+      _write_keypoints_payload(generated, frame_count=4)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)
@@ -317,15 +309,7 @@ def test_extract_smpl_keypoints_from_raw_human_npz_reruns_when_source_npz_change
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       output_path = Path(cmd[cmd.index("--output-path") + 1])
       generated = output_path / "amass_raw_motion_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((6, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((6, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((6, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((6, 2), dtype=np.int32),
-        },
-      )
+      _write_keypoints_payload(generated, frame_count=6)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)
@@ -371,15 +355,7 @@ def test_extract_smpl_keypoints_from_raw_human_npz_force_remake_reruns_cached_ou
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       output_path = Path(cmd[cmd.index("--output-path") + 1])
       generated = output_path / "amass_raw_motion_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((4, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((4, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-        },
-      )
+      _write_keypoints_payload(generated, frame_count=4)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)
@@ -413,20 +389,16 @@ def test_extract_smpl_keypoints_from_raw_human_npz_preserves_manifest_metadata(
     recorded_commands.append(list(cmd))
     if cmd[1].endswith("convert_amass_to_proto.py"):
       motion_dir = Path(cmd[2])
-      (motion_dir / "crouch_lie_down.motion").write_text("fake motion\n", encoding="utf-8")
+      (motion_dir / "crouch_lie_down.motion").write_text(
+        "fake motion\n", encoding="utf-8"
+      )
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       motion_file = Path(cmd[2])
       output_path = Path(cmd[cmd.index("--output-path") + 1])
-      generated = output_path / f"{motion_file.parent.name}_{motion_file.stem}_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((5, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((5, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((5, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((5, 2), dtype=np.int32),
-        },
+      generated = (
+        output_path / f"{motion_file.parent.name}_{motion_file.stem}_keypoints.npy"
       )
+      _write_keypoints_payload(generated, frame_count=5)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)
@@ -480,16 +452,10 @@ def test_extract_smpl_keypoints_from_raw_human_npz_invokes_proto_steps_in_order(
     elif cmd[1].endswith("extract_keypoints_from_single_motion.py"):
       motion_file = Path(cmd[2])
       output_path = Path(cmd[cmd.index("--output-path") + 1])
-      generated = output_path / f"{motion_file.parent.name}_{motion_file.stem}_keypoints.npy"
-      np.save(
-        generated,
-        {
-          "positions": np.zeros((4, 18, 3), dtype=np.float32),
-          "orientations": np.zeros((4, 18, 3, 3), dtype=np.float32),
-          "left_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-          "right_foot_contacts": np.zeros((4, 2), dtype=np.int32),
-        },
+      generated = (
+        output_path / f"{motion_file.parent.name}_{motion_file.stem}_keypoints.npy"
       )
+      _write_keypoints_payload(generated, frame_count=4)
     return subprocess.CompletedProcess(cmd, 0)
 
   monkeypatch.setattr(subprocess, "run", fake_run)

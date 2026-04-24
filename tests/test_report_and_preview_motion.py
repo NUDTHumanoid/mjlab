@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -46,7 +47,7 @@ def test_report_and_preview_motion_writes_report_only(tmp_path: Path) -> None:
     work_dir=tmp_path / "report",
   )
 
-  report_path = Path(result["report_path"])
+  report_path = Path(cast(str, result["report_path"]))
   assert report_path.is_file()
   report = json.loads(report_path.read_text(encoding="utf-8"))
   assert report["motion_name"] == "handstand1"
@@ -81,7 +82,9 @@ def test_report_and_preview_motion_builds_and_previews_when_requested(
     recorded_preview["viewer"] = cfg.viewer
     recorded_preview["agent"] = cfg.agent
 
-  monkeypatch.setattr(report_script, "build_tracking_motion", fake_build_tracking_motion)
+  monkeypatch.setattr(
+    report_script, "build_tracking_motion", fake_build_tracking_motion
+  )
   monkeypatch.setattr(report_script, "run_play", fake_run_play)
 
   result = report_script.report_and_preview_motion(
@@ -93,7 +96,9 @@ def test_report_and_preview_motion_builds_and_previews_when_requested(
     viewer="viser",
   )
 
-  report = json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))
+  report = json.loads(
+    Path(cast(str, result["report_path"])).read_text(encoding="utf-8")
+  )
   assert report["build"]["artifacts"]["motion_npz_path"] == str(built_motion)
   assert recorded_preview["task_id"] == "Mjlab-Tracking-Flat-Unitree-G1"
   assert recorded_preview["motion_file"] == str(built_motion)
@@ -129,7 +134,9 @@ def test_report_and_preview_motion_resolves_local_defaults(
     }
 
   monkeypatch.chdir(tmp_path)
-  monkeypatch.setattr(report_script, "build_tracking_motion", fake_build_tracking_motion)
+  monkeypatch.setattr(
+    report_script, "build_tracking_motion", fake_build_tracking_motion
+  )
   monkeypatch.setattr(report_script.Path, "home", lambda: tmp_path)
 
   result = report_script.report_and_preview_motion(
@@ -138,22 +145,25 @@ def test_report_and_preview_motion_resolves_local_defaults(
     quality="quick",
   )
 
-  report = json.loads(Path(result["report_path"]).read_text(encoding="utf-8"))
+  report = json.loads(
+    Path(cast(str, result["report_path"])).read_text(encoding="utf-8")
+  )
   assert report["resolved_protomotions_root"] == str(proto_root.resolve())
   assert recorded_build_kwargs["protomotions_root"] == proto_root.resolve()
   assert recorded_build_kwargs["retarget_subsample_factor"] == 2
   assert recorded_build_kwargs["retarget_target_raw_frames"] == 120
 
 
-def test_report_and_preview_motion_requires_protomotions_for_build(tmp_path: Path) -> None:
+def test_report_and_preview_motion_requires_protomotions_for_build(
+  tmp_path: Path,
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
   raw_path = tmp_path / "handstand1.npz"
   _write_raw_motion(raw_path)
 
-  original_default = report_script._default_protomotions_root
-  report_script._default_protomotions_root = lambda: None
+  monkeypatch.setattr(report_script, "_default_protomotions_root", lambda: None)
   with pytest.raises(ValueError, match="protomotions_root"):
     report_script.report_and_preview_motion(
       input_file=raw_path,
       build=True,
     )
-  report_script._default_protomotions_root = original_default

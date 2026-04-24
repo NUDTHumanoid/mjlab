@@ -1,9 +1,12 @@
 """Tests specific to motion tracking tasks."""
 
+from typing import cast
+
 import pytest
 
 from mjlab.asset_zoo.robots import G1_ACTION_SCALE
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
 
@@ -225,22 +228,27 @@ def test_crouch_to_lie_down_loading_does_not_pollute_baseline_cfg() -> None:
   assert baseline_after_motion.pose_range == baseline_before_motion.pose_range, (
     "Baseline motion pose_range changed after loading crouch-to-lie-down variant"
   )
-  assert baseline_after_motion.velocity_range == baseline_before_motion.velocity_range, (
-    "Baseline motion velocity_range changed after loading crouch-to-lie-down variant"
-  )
+  assert (
+    baseline_after_motion.velocity_range == baseline_before_motion.velocity_range
+  ), "Baseline motion velocity_range changed after loading crouch-to-lie-down variant"
   assert (
     baseline_after_motion.joint_position_range
     == baseline_before_motion.joint_position_range
-  ), "Baseline motion joint_position_range changed after loading crouch-to-lie-down variant"
-  assert baseline_after.terminations["anchor_pos"].params["threshold"] == baseline_before.terminations["anchor_pos"].params["threshold"], (
-    "Baseline anchor_pos threshold changed after loading crouch-to-lie-down variant"
+  ), (
+    "Baseline motion joint_position_range changed after loading crouch-to-lie-down variant"
   )
-  assert baseline_after.terminations["ee_body_pos"].params["threshold"] == baseline_before.terminations["ee_body_pos"].params["threshold"], (
-    "Baseline ee_body_pos threshold changed after loading crouch-to-lie-down variant"
-  )
-  assert baseline_after.terminations["anchor_ori"].params["threshold"] == baseline_before.terminations["anchor_ori"].params["threshold"], (
-    "Baseline anchor_ori threshold changed after loading crouch-to-lie-down variant"
-  )
+  assert (
+    baseline_after.terminations["anchor_pos"].params["threshold"]
+    == baseline_before.terminations["anchor_pos"].params["threshold"]
+  ), "Baseline anchor_pos threshold changed after loading crouch-to-lie-down variant"
+  assert (
+    baseline_after.terminations["ee_body_pos"].params["threshold"]
+    == baseline_before.terminations["ee_body_pos"].params["threshold"]
+  ), "Baseline ee_body_pos threshold changed after loading crouch-to-lie-down variant"
+  assert (
+    baseline_after.terminations["anchor_ori"].params["threshold"]
+    == baseline_before.terminations["anchor_ori"].params["threshold"]
+  ), "Baseline anchor_ori threshold changed after loading crouch-to-lie-down variant"
 
 
 def test_crouch_to_lie_down_increases_contact_capacity() -> None:
@@ -254,6 +262,7 @@ def test_crouch_to_lie_down_increases_contact_capacity() -> None:
   assert crouch_cfg.sim.nconmax == 55, (
     f"Task {crouch_task_id} sim.nconmax={crouch_cfg.sim.nconmax}, expected 55"
   )
+  assert baseline_cfg.sim.nconmax is not None
   assert crouch_cfg.sim.nconmax > baseline_cfg.sim.nconmax, (
     f"Task {crouch_task_id} sim.nconmax={crouch_cfg.sim.nconmax} is not greater than "
     f"baseline nconmax={baseline_cfg.sim.nconmax}"
@@ -308,6 +317,7 @@ def test_acrobatics_training_cfg_is_relaxed_for_flips() -> None:
   assert motion_cmd.joint_position_range == (0.0, 0.0)
   assert cfg.episode_length_s == 15.0
   assert cfg.sim.nconmax == 80
+  assert cfg.sim.njmax == 300
   assert "push_robot" not in cfg.events
   assert "base_com" in cfg.events
   assert "encoder_bias" in cfg.events
@@ -320,7 +330,7 @@ def test_acrobatics_training_cfg_is_relaxed_for_flips() -> None:
 def test_acrobatics_rl_cfg_targets_long_finetune() -> None:
   """Acrobatics finetune should target the existing experiment root with longer training."""
   task_id = "Mjlab-Tracking-Flat-Unitree-G1-Acrobatics"
-  cfg = load_rl_cfg(task_id)
+  cfg = cast(RslRlOnPolicyRunnerCfg, load_rl_cfg(task_id))
 
   assert cfg.experiment_name == "g1_tracking_handstand1"
   assert cfg.max_iterations == 40_000

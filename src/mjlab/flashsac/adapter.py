@@ -79,7 +79,7 @@ class MjlabFlashSACEnvAdapter:
   def reset(self) -> tuple[np.ndarray, dict[str, Any]]:
     obs_dict, extras = self.env.reset()
     flat_obs = self._flatten_obs(obs_dict).cpu().numpy().astype(np.float32, copy=False)
-    env_info = {"actor_observation_size": (self.actor_dim,)}
+    env_info: dict[str, Any] = {"actor_observation_size": (self.actor_dim,)}
     if "log" in extras:
       episode_info = {
         key: scalar
