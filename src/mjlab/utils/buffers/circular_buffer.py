@@ -214,6 +214,28 @@ class CircularBuffer:
 
     self._num_pushes += 1
 
+  def prime(self, data: torch.Tensor, batch_ids: Sequence[int] | torch.Tensor) -> None:
+    """Seed selected batch rows with a first valid value without advancing time.
+
+    This is useful when some environments reset mid-step and their history rows
+    need to be reinitialized from the new observation without moving the global
+    circular pointer for the rest of the batch.
+    """
+    if data.shape[0] != self._batch_size:
+      raise ValueError(f"Expected batch size {self._batch_size}, got {data.shape[0]}")
+
+    data = data.to(self._device)
+
+    if self._buffer is None:
+      self._pointer = -1
+      self._buffer = torch.zeros(
+        (self._max_len, *data.shape), dtype=data.dtype, device=self._device
+      )
+
+    ids: Sequence[int] | torch.Tensor = batch_ids
+    self._buffer[:, ids] = data[ids]
+    self._num_pushes[ids] = 1
+
   def __getitem__(self, key: torch.Tensor | int) -> torch.Tensor:
     """Retrieve lagged frames per batch (LIFO).
 

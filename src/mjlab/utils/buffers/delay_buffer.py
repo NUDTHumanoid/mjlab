@@ -226,6 +226,12 @@ class DelayBuffer:
     """
     self._buffer.append(data)
 
+  def prime(self, data: torch.Tensor, batch_ids: Sequence[int] | torch.Tensor) -> None:
+    """Seed selected environments with a fresh undelayed observation."""
+    self._buffer.prime(data, batch_ids=batch_ids)
+    self._current_lags[batch_ids] = 0
+    self._step_count[batch_ids] = 0
+
   def compute(self) -> torch.Tensor:
     """Compute delayed observation for current step.
 

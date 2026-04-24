@@ -137,6 +137,11 @@ class BaseAction(ActionTerm):
     return self._raw_actions
 
   @property
+  def processed_action(self) -> torch.Tensor:
+    """Processed actions after applying scale, offset, and clipping."""
+    return self._processed_actions
+
+  @property
   def action_dim(self) -> int:
     """Dimension of the action space."""
     return self._action_dim

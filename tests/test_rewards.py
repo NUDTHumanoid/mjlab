@@ -78,6 +78,7 @@ def mock_env():
   env.device = "cpu"
   env.step_dt = 0.01
   env.max_episode_length_s = 10.0
+  env.episode_length_buf = torch.zeros(env.num_envs, dtype=torch.long)
   robot = Mock()
   env.scene = {"robot": robot}
   env.command_manager.get_command = Mock(
@@ -155,6 +156,34 @@ def test_stateless_class_reward_no_reset(mock_env, stateless_reward_config):
 
   # Reset should work without errors.
   manager.reset(env_ids=torch.tensor([0, 2]))
+
+
+def test_reward_manager_logs_total_reward_and_episode_length(mock_env) -> None:
+  cfg = {
+    "term1": RewardTermCfg(
+      func=lambda env: torch.ones(env.num_envs),
+      weight=2.0,
+      params={},
+    ),
+    "term2": RewardTermCfg(
+      func=lambda env: torch.full((env.num_envs,), 3.0),
+      weight=1.0,
+      params={},
+    ),
+  }
+  mock_env.episode_length_buf = torch.tensor([10, 20, 30, 40], dtype=torch.long)
+  manager = RewardManager(cfg, mock_env, scale_by_dt=False)
+
+  manager.compute(dt=mock_env.step_dt)
+  extras = manager.reset(env_ids=torch.tensor([1, 3]))
+
+  # Per-term logs keep existing per-second normalization behavior.
+  assert torch.isclose(extras["Episode_Reward/term1"], torch.tensor(0.2))
+  assert torch.isclose(extras["Episode_Reward/term2"], torch.tensor(0.3))
+  # Total reward is the true episodic return average over reset envs.
+  assert torch.isclose(extras["Episode_Reward/total"], torch.tensor(5.0))
+  assert torch.isclose(extras["Episode/length_steps"], torch.tensor(30.0))
+  assert torch.isclose(extras["Episode/length_seconds"], torch.tensor(0.3))
 
 
 def test_electrical_power_cost_partially_actuated(device):

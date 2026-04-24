@@ -21,6 +21,19 @@ def compute_mpkpe(command: MotionCommand) -> torch.Tensor:
   return per_body_error.mean(dim=-1)  # (num_envs,)
 
 
+def compute_anchor_planar_position_error(command: MotionCommand) -> torch.Tensor:
+  """Compute planar anchor drift, ignoring height."""
+  return torch.norm(
+    command.anchor_pos_w[:, :2] - command.robot_anchor_pos_w[:, :2],
+    dim=-1,
+  )
+
+
+def compute_anchor_height_error(command: MotionCommand) -> torch.Tensor:
+  """Compute anchor height mismatch."""
+  return torch.abs(command.anchor_pos_w[:, -1] - command.robot_anchor_pos_w[:, -1])
+
+
 def compute_root_relative_mpkpe(command: MotionCommand) -> torch.Tensor:
   """Compute Root-relative Mean Per-Keybody Position Error (R-MPKPE).
 
@@ -41,6 +54,22 @@ def compute_root_relative_mpkpe(command: MotionCommand) -> torch.Tensor:
   pos_error = ref_rel_pos - robot_rel_pos
   per_body_error = torch.norm(pos_error, dim=-1)  # (num_envs, num_bodies)
   return per_body_error.mean(dim=-1)  # (num_envs,)
+
+
+def compute_mean_body_height_error(
+  command: MotionCommand,
+  body_names: tuple[str, ...] | None = None,
+) -> torch.Tensor:
+  """Compute mean body height error over the selected bodies."""
+  body_indices = _get_body_indices(command, body_names)
+  if len(body_indices) == 0:
+    return torch.zeros(command.num_envs, device=command.device)
+
+  pos_error = torch.abs(
+    command.body_pos_relative_w[:, body_indices, -1]
+    - command.robot_body_pos_w[:, body_indices, -1]
+  )
+  return pos_error.mean(dim=-1)
 
 
 def compute_joint_velocity_error(command: MotionCommand) -> torch.Tensor:
@@ -84,7 +113,7 @@ def compute_ee_orientation_error(
 
 def _get_body_indices(
   command: MotionCommand,
-  body_names: tuple[str, ...],
+  body_names: tuple[str, ...] | None,
 ) -> list[int]:
   """Get indices of specified bodies within the command's body list.
 
@@ -95,4 +124,6 @@ def _get_body_indices(
   Returns:
     List of indices into command.cfg.body_names.
   """
+  if body_names is None:
+    return list(range(len(command.cfg.body_names)))
   return [i for i, name in enumerate(command.cfg.body_names) if name in body_names]

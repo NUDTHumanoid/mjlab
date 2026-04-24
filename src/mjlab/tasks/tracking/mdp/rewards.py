@@ -33,6 +33,17 @@ def motion_global_anchor_position_error_exp(
   return torch.exp(-error / std**2)
 
 
+def motion_global_anchor_planar_position_error_exp(
+  env: ManagerBasedRlEnv, command_name: str, std: float
+) -> torch.Tensor:
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  error = torch.sum(
+    torch.square(command.anchor_pos_w[:, :2] - command.robot_anchor_pos_w[:, :2]),
+    dim=-1,
+  )
+  return torch.exp(-error / std**2)
+
+
 def motion_global_anchor_orientation_error_exp(
   env: ManagerBasedRlEnv, command_name: str, std: float
 ) -> torch.Tensor:
@@ -55,6 +66,21 @@ def motion_relative_body_position_error_exp(
       - command.robot_body_pos_w[:, body_indexes]
     ),
     dim=-1,
+  )
+  return torch.exp(-error.mean(-1) / std**2)
+
+
+def motion_relative_body_height_error_exp(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  std: float,
+  body_names: tuple[str, ...] | None = None,
+) -> torch.Tensor:
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  body_indexes = _get_body_indexes(command, body_names)
+  error = torch.square(
+    command.body_pos_relative_w[:, body_indexes, -1]
+    - command.robot_body_pos_w[:, body_indexes, -1]
   )
   return torch.exp(-error.mean(-1) / std**2)
 

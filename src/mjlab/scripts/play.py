@@ -3,19 +3,33 @@
 import os
 import sys
 import time as _time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import torch
 import tyro
 
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.flashsac import (
+  apply_flashsac_tracking_inference_overrides,
+  load_flashsac_policy,
+)
+from mjlab.flashsac.runtime import (
+  apply_flashsac_checkpoint_env_parity,
+  render_flashsac_checkpoint_env_parity_audit,
+  resolve_flashsac_checkpoint_dir,
+  resolve_tracking_motion_file,
+)
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
+from mjlab.rl.checkpoint_restore import load_rsl_rl_runtime_configs
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_wandb_checkpoint_path
+from mjlab.utils.os import (
+  apply_rsl_rl_checkpoint_env_parity,
+  get_wandb_checkpoint_path,
+)
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
@@ -31,6 +45,7 @@ def _parse_wandb_dt(value: str | datetime) -> datetime:
 
 @dataclass(frozen=True)
 class PlayConfig:
+  backend: Literal["rsl_rl", "flashsac"] = "rsl_rl"
   agent: Literal["zero", "random", "trained"] = "trained"
   registry_name: str | None = None
   wandb_run_path: str | None = None
@@ -53,16 +68,77 @@ class PlayConfig:
   _demo_mode: tyro.conf.Suppress[bool] = False
 
 
+class FlashSACViewerEnvWrapper:
+  def __init__(self, env: Any):
+    self.env = env
+    self._obs, _ = self.env.reset()
+
+  @property
+  def cfg(self):
+    return self.unwrapped.cfg
+
+  @property
+  def device(self):
+    return self.unwrapped.device
+
+  @property
+  def num_envs(self) -> int:
+    return int(self.unwrapped.num_envs)
+
+  @property
+  def render_mode(self) -> str | None:
+    return getattr(self.env, "render_mode", None)
+
+  @property
+  def unwrapped(self):
+    return self.env.unwrapped
+
+  def get_observations(self):
+    return self._obs
+
+  def reset(self):
+    self._obs, extras = self.env.reset()
+    return self._obs, extras
+
+  def step(self, actions):
+    result = self.env.step(actions)
+    self._obs = result[0]
+    return result
+
+  def close(self) -> None:
+    self.env.close()
+
+
+def _resolve_viewer_backend(viewer: Literal["auto", "native", "viser"]) -> str:
+  if viewer != "auto":
+    return viewer
+  has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+  return "native" if has_display else "viser"
+
+
 def run_play(task_id: str, cfg: PlayConfig):
   configure_torch_backends()
+  if cfg.backend == "flashsac":
+    _run_flashsac_play(task_id, cfg)
+    return
+  _run_rsl_rl_play(task_id, cfg)
 
+
+def _run_rsl_rl_play(task_id: str, cfg: PlayConfig):
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
-
-  env_cfg = load_env_cfg(task_id, play=True)
-  agent_cfg = load_rl_cfg(task_id)
 
   DUMMY_MODE = cfg.agent in {"zero", "random"}
   TRAINED_MODE = not DUMMY_MODE
+
+  env_cfg, agent_cfg, restored_from_checkpoint, restored_run_dir = (
+    load_rsl_rl_runtime_configs(
+      task_id,
+      checkpoint_file=cfg.checkpoint_file if TRAINED_MODE else None,
+      play=True,
+    )
+  )
+  if restored_from_checkpoint and restored_run_dir is not None:
+    print(f"[INFO] Restored RSL-RL config from {restored_run_dir / 'params'}")
 
   # Disable terminations if requested (useful for viewing motions).
   if cfg.no_terminations:
@@ -80,6 +156,47 @@ def run_play(task_id: str, cfg: PlayConfig):
     assert isinstance(motion_cmd, MotionCommandCfg)
     motion_cmd.sampling_mode = "uniform"
 
+  log_dir: Path | None = None
+  resume_path: Path | None = None
+  checkpoint_parity = None
+  if TRAINED_MODE:
+    experiment_name = agent_cfg["experiment_name"]
+    log_root_path = (Path("logs") / "rsl_rl" / experiment_name).resolve()
+    if cfg.checkpoint_file is not None:
+      resume_path = Path(cfg.checkpoint_file)
+      if not resume_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
+      print(f"[INFO]: Loading checkpoint: {resume_path.name}")
+    else:
+      if cfg.wandb_run_path is None:
+        raise ValueError(
+          "`wandb_run_path` is required when `checkpoint_file` is not provided."
+        )
+      resume_path, was_cached = get_wandb_checkpoint_path(
+        log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name
+      )
+      # Extract run_id and checkpoint name from path for display.
+      run_id = resume_path.parent.name
+      checkpoint_name = resume_path.name
+      cached_str = "cached" if was_cached else "downloaded"
+      print(
+        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
+      )
+    log_dir = resume_path.parent
+    checkpoint_parity = apply_rsl_rl_checkpoint_env_parity(env_cfg, resume_path)
+    if checkpoint_parity is not None:
+      print(
+        "[INFO]: Applied checkpoint env parity from "
+        f"{checkpoint_parity.env_yaml_path}: "
+        f"sampling_mode={checkpoint_parity.sampling_mode}, "
+        f"actor_corruption={checkpoint_parity.actor_enable_corruption}, "
+        f"critic_corruption={checkpoint_parity.critic_enable_corruption}, "
+        f"episode_length_s={checkpoint_parity.episode_length_s}, "
+        f"startup_events={checkpoint_parity.startup_event_names}, "
+        f"saved_motion_file={checkpoint_parity.motion_file}, "
+        f"saved_num_envs={checkpoint_parity.num_envs}"
+      )
+
   if is_tracking_task:
     motion_cmd = env_cfg.commands["motion"]
     assert isinstance(motion_cmd, MotionCommandCfg)
@@ -88,6 +205,10 @@ def run_play(task_id: str, cfg: PlayConfig):
     if cfg.motion_file is not None and Path(cfg.motion_file).exists():
       print(f"[INFO]: Using local motion file: {cfg.motion_file}")
       motion_cmd.motion_file = cfg.motion_file
+    elif motion_cmd.motion_file and Path(motion_cmd.motion_file).exists():
+      print(
+        f"[INFO]: Using motion file from checkpoint params: {motion_cmd.motion_file}"
+      )
     elif DUMMY_MODE:
       if not cfg.registry_name:
         raise ValueError(
@@ -126,32 +247,6 @@ def run_play(task_id: str, cfg: PlayConfig):
             raise RuntimeError("No motion artifact found in the run.")
           motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
 
-  log_dir: Path | None = None
-  resume_path: Path | None = None
-  if TRAINED_MODE:
-    log_root_path = (Path("logs") / "rsl_rl" / agent_cfg.experiment_name).resolve()
-    if cfg.checkpoint_file is not None:
-      resume_path = Path(cfg.checkpoint_file)
-      if not resume_path.exists():
-        raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
-      print(f"[INFO]: Loading checkpoint: {resume_path.name}")
-    else:
-      if cfg.wandb_run_path is None:
-        raise ValueError(
-          "`wandb_run_path` is required when `checkpoint_file` is not provided."
-        )
-      resume_path, was_cached = get_wandb_checkpoint_path(
-        log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name
-      )
-      # Extract run_id and checkpoint name from path for display.
-      run_id = resume_path.parent.name
-      checkpoint_name = resume_path.name
-      cached_str = "cached" if was_cached else "downloaded"
-      print(
-        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
-      )
-    log_dir = resume_path.parent
-
   if cfg.num_envs is not None:
     env_cfg.scene.num_envs = cfg.num_envs
   if cfg.video_height is not None:
@@ -177,7 +272,7 @@ def run_play(task_id: str, cfg: PlayConfig):
       disable_logger=True,
     )
 
-  env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+  env = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.get("clip_actions"))
   if DUMMY_MODE:
     action_shape: tuple[int, ...] = env.unwrapped.action_space.shape
     if cfg.agent == "zero":
@@ -198,7 +293,7 @@ def run_play(task_id: str, cfg: PlayConfig):
       policy = PolicyRandom()
   else:
     runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-    runner = runner_cls(env, asdict(agent_cfg), device=device)
+    runner = runner_cls(env, agent_cfg, device=device)
     runner.load(
       str(resume_path), load_cfg={"actor": True}, strict=True, map_location=device
     )
@@ -276,13 +371,7 @@ def run_play(task_id: str, cfg: PlayConfig):
         run_status=wandb_run.state,
       )
 
-  # Handle "auto" viewer selection.
-  if cfg.viewer == "auto":
-    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    resolved_viewer = "native" if has_display else "viser"
-    del has_display
-  else:
-    resolved_viewer = cfg.viewer
+  resolved_viewer = _resolve_viewer_backend(cfg.viewer)
 
   if resolved_viewer == "native":
     NativeMujocoViewer(env, policy).run()
@@ -292,6 +381,106 @@ def run_play(task_id: str, cfg: PlayConfig):
     raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
 
   env.close()
+
+
+def _run_flashsac_play(task_id: str, cfg: PlayConfig):
+  device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+  env_cfg = load_env_cfg(task_id, play=True)
+  checkpoint_parity = None
+
+  if cfg.no_terminations:
+    env_cfg.terminations = {}
+    print("[INFO]: Terminations disabled")
+
+  is_tracking_task = "motion" in env_cfg.commands and isinstance(
+    env_cfg.commands["motion"], MotionCommandCfg
+  )
+  if is_tracking_task:
+    motion_cmd = env_cfg.commands["motion"]
+    assert isinstance(motion_cmd, MotionCommandCfg)
+    apply_flashsac_tracking_inference_overrides(env_cfg)
+    if cfg.agent == "trained" and cfg.checkpoint_file is not None:
+      checkpoint_parity = apply_flashsac_checkpoint_env_parity(
+        env_cfg,
+        cfg.checkpoint_file,
+      )
+      if checkpoint_parity is not None:
+        print(render_flashsac_checkpoint_env_parity_audit(checkpoint_parity))
+    if cfg._demo_mode:
+      motion_cmd.sampling_mode = "uniform"
+    resolve_tracking_motion_file(
+      motion_cmd,
+      motion_file=cfg.motion_file,
+      registry_name=cfg.registry_name if cfg.agent in {"zero", "random"} else None,
+      wandb_run_path=cfg.wandb_run_path,
+      checkpoint_file=cfg.checkpoint_file,
+    )
+
+  if cfg.agent == "trained" and cfg.checkpoint_file is None:
+    raise ValueError("FlashSAC play requires `checkpoint_file` for trained agents.")
+
+  if cfg.num_envs is not None:
+    env_cfg.scene.num_envs = cfg.num_envs
+  if cfg.video_height is not None:
+    env_cfg.viewer.height = cfg.video_height
+  if cfg.video_width is not None:
+    env_cfg.viewer.width = cfg.video_width
+
+  env = ManagerBasedRlEnv(
+    cfg=env_cfg,
+    device=device,
+    render_mode="rgb_array" if cfg.video and cfg.agent == "trained" else None,
+  )
+  viewer_env: Any = FlashSACViewerEnvWrapper(env)
+  if cfg.video and cfg.agent == "trained":
+    assert cfg.checkpoint_file is not None
+    checkpoint_dir = Path(cfg.checkpoint_file).resolve()
+    checkpoint_dir = resolve_flashsac_checkpoint_dir(checkpoint_dir)
+    recorded_env = VideoRecorder(
+      env,
+      video_folder=checkpoint_dir / "videos" / "play",
+      step_trigger=lambda step: step == 0,
+      video_length=cfg.video_length,
+      disable_logger=True,
+    )
+    viewer_env = FlashSACViewerEnvWrapper(recorded_env)
+
+  if cfg.agent == "zero":
+
+    class PolicyZero:
+      def __call__(self, obs) -> torch.Tensor:
+        del obs
+        shape = env.unwrapped.action_space.shape
+        return torch.zeros(shape, device=env.unwrapped.device)
+
+    policy = PolicyZero()
+  elif cfg.agent == "random":
+
+    class PolicyRandom:
+      def __call__(self, obs) -> torch.Tensor:
+        del obs
+        shape = env.unwrapped.action_space.shape
+        return 2 * torch.rand(shape, device=env.unwrapped.device) - 1
+
+    policy = PolicyRandom()
+  else:
+    assert cfg.checkpoint_file is not None
+    policy = load_flashsac_policy(
+      env=viewer_env,
+      checkpoint_path=cfg.checkpoint_file,
+      device=device,
+    )
+
+  resolved_viewer = _resolve_viewer_backend(cfg.viewer)
+
+  if resolved_viewer == "native":
+    NativeMujocoViewer(cast(Any, viewer_env), cast(Any, policy)).run()
+  elif resolved_viewer == "viser":
+    ViserPlayViewer(cast(Any, viewer_env), cast(Any, policy)).run()
+  else:
+    raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
+
+  viewer_env.close()
 
 
 def main():

@@ -257,6 +257,10 @@ class ObservationManager(ManagerBase):
       mod.reset(env_ids=env_ids)
     return {}
 
+  def invalidate_cache(self) -> None:
+    """Invalidate the cached observations without touching history buffers."""
+    self._obs_buffer = None
+
   def _check_and_handle_nans(
     self, tensor: torch.Tensor, context: str, policy: str
   ) -> torch.Tensor:
@@ -302,22 +306,35 @@ class ObservationManager(ManagerBase):
     return torch.nan_to_num(tensor, nan=0.0, posinf=0.0, neginf=0.0)
 
   def compute(
-    self, update_history: bool = False
+    self,
+    update_history: bool = False,
+    prime_history_env_ids: torch.Tensor | None = None,
   ) -> dict[str, torch.Tensor | dict[str, torch.Tensor]]:
     # Return cached observations if not updating and cache exists.
     # This prevents double-pushing to delay buffers when compute() is called
     # multiple times per control step (e.g., in get_observations() after step()).
-    if not update_history and self._obs_buffer is not None:
+    if (
+      not update_history
+      and prime_history_env_ids is None
+      and self._obs_buffer is not None
+    ):
       return self._obs_buffer
 
     obs_buffer: dict[str, torch.Tensor | dict[str, torch.Tensor]] = dict()
     for group_name in self._group_obs_term_names:
-      obs_buffer[group_name] = self.compute_group(group_name, update_history)
+      obs_buffer[group_name] = self.compute_group(
+        group_name,
+        update_history,
+        prime_history_env_ids=prime_history_env_ids,
+      )
     self._obs_buffer = obs_buffer
     return obs_buffer
 
   def compute_group(
-    self, group_name: str, update_history: bool = False
+    self,
+    group_name: str,
+    update_history: bool = False,
+    prime_history_env_ids: torch.Tensor | None = None,
   ) -> torch.Tensor | dict[str, torch.Tensor]:
     group_cfg = self.cfg[group_name]
     group_term_names = self._group_obs_term_names[group_name]
@@ -346,12 +363,17 @@ class ObservationManager(ManagerBase):
 
       if term_cfg.delay_max_lag > 0:
         delay_buffer = self._group_obs_term_delay_buffer[group_name][term_name]
-        delay_buffer.append(obs)
+        if update_history or not delay_buffer.is_initialized:
+          delay_buffer.append(obs)
+        elif prime_history_env_ids is not None:
+          delay_buffer.prime(obs, batch_ids=prime_history_env_ids)
         obs = delay_buffer.compute()
       if term_cfg.history_length > 0:
         circular_buffer = self._group_obs_term_history_buffer[group_name][term_name]
         if update_history or not circular_buffer.is_initialized:
           circular_buffer.append(obs)
+        elif prime_history_env_ids is not None:
+          circular_buffer.prime(obs, batch_ids=prime_history_env_ids)
 
         if term_cfg.flatten_history_dim:
           group_obs[term_name] = circular_buffer.buffer.reshape(self._env.num_envs, -1)
