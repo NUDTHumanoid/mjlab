@@ -11,6 +11,8 @@
 
 - `Mjlab-Tracking-Flat-Unitree-G1-Late-Phase-DR-Finetune`
 - `Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune`
+- `Mjlab-Tracking-Rough-Unitree-G1-Late-Phase-DR-Finetune`
+- `Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune`
 
 ## 与原框架的兼容性
 
@@ -42,6 +44,12 @@
 - 如果只是部署或 clean 回放 checkpoint，可以直接放回原框架
 - 如果还要复现本文的 late-phase 扰动训练或评测，请使用当前这版代码
 
+对 rough 版也是一样：
+
+- checkpoint 本身仍然不依赖新增 observation / action 接口
+- rough late-phase 只是把“rough tracking 的环境逻辑”和“late-phase 恢复扰动逻辑”叠加到一起
+- 不带这些新任务和新 CLI 的旧代码，无法直接复现本文的 rough late-phase 训练 / 评测
+
 ## 当前设计目标
 
 这版 late-phase finetune 的设计原则是：
@@ -65,6 +73,32 @@
 - 从整段动作分布中采样
 
 这样做是为了避免前半段空翻能力被明显遗忘。
+
+## Rough 版本如何叠加
+
+rough late-phase 不是另一套完全不同的恢复任务，而是：
+
+- 保留原 `Rough` 地形生成与四阶段 terrain curriculum
+- 保留 rough play 的 staged terrain 展示逻辑
+- 保留 rough 专用 reward / termination 设计
+- 在此基础上再叠加同一套 `late_phase_dr_disturbance`
+- 继续使用同一套 conservative PPO finetune 配置
+
+也就是说，rough 版额外保留的是：
+
+- `motion_global_root_pos` 改为 `XY-only`
+- 保留 `motion_global_root_z_vel`
+- 保留 `motion_global_root_z_pos`
+- 保留 rough 中更宽松的 `anchor_ori.threshold = 1.2`
+- 继续移除 rough 下不合适的 `anchor_pos` / `ee_body_pos`
+- 继续关闭 rough 里的 `push_robot`
+
+因此 rough late-phase 任务更适合解决这种组合问题：
+
+- 地形有轻微不平
+- 空翻 / 翻滚后的姿态恢复本身又容易因为过冲或冲量不足失败
+
+如果你的目标是实机后半段恢复，而部署地面并不完全理想，这个版本会比 flat late-phase 更接近真实问题。
 
 ### 2. late-phase 渐进式扰动
 
@@ -241,7 +275,7 @@
 
 ## 参考训练命令
 
-### 1. 默认强度训练
+### 1. Flat 默认强度训练
 
 ```bash
 MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune \
@@ -251,7 +285,7 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Fine
   --agent.run-name tiger_jump_late_phase_dr_ft
 ```
 
-### 2. 推荐的稳健训练起点
+### 2. Flat 推荐的稳健训练起点
 
 当前更推荐把训练强度设得明显低于最终 stress test 评测强度，例如：
 
@@ -270,7 +304,7 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Fine
   --agent.run-name tiger_jump_late_phase_dr_os3_up1p5_ft
 ```
 
-### 3. 按较强恢复分布训练
+### 3. Flat 按较强恢复分布训练
 
 如果你当前观察下来觉得下面这组比较符合：
 
@@ -289,9 +323,43 @@ MUJOCO_GL=egl uv run train Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Fine
   --agent.run-name tiger_jump_late_phase_dr_os7_up3_ft
 ```
 
+### 4. Rough 默认强度训练
+
+如果你已经有 rough clean checkpoint，更推荐从 rough checkpoint 继续做 second-stage late-phase finetune：
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/rough_checkpoint.pt \
+  --env.commands.motion.motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --env.scene.num-envs 4096 \
+  --agent.run-name tiger_jump_rough_late_phase_dr_ft
+```
+
+如果你当前还没有 rough checkpoint，也可以直接从 flat checkpoint 起步，只是同时学习 rough 地形和 late-phase 恢复，训练难度会更高：
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /home/dp/czy/mjlab/logs/rsl_rl/g1_tracking/2026-04-10_11-12-04/model_53000.pt \
+  --env.commands.motion.motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --env.scene.num-envs 4096 \
+  --agent.run-name tiger_jump_rough_late_phase_dr_from_flat_ft
+```
+
+### 5. Rough 按较强恢复分布训练
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/rough_checkpoint.pt \
+  --env.commands.motion.motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --late-phase-train-overshoot-scale 7.0 \
+  --late-phase-train-underpowered-scale 3.0 \
+  --env.scene.num-envs 4096 \
+  --agent.run-name tiger_jump_rough_late_phase_dr_os7_up3_ft
+```
+
 ## 参考评测命令
 
-### 1. clean 完整动作
+### 1. Flat clean 完整动作
 
 ```bash
 MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
@@ -300,7 +368,7 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
   --num-envs 1
 ```
 
-### 2. late-phase 扰动评测
+### 2. Flat late-phase 扰动评测
 
 ```bash
 MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
@@ -328,6 +396,34 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
 
 - `--no-terminations True`
 
+### 3. Rough clean 完整动作
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --num-envs 1
+```
+
+### 4. Rough late-phase 扰动评测
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /home/dp/czy/mjlab/datasets/npz/tiger_jump_g1_new.npz \
+  --simulate-late-phase-aggressive-dr True \
+  --late-phase-play-overshoot-scale 7.0 \
+  --late-phase-play-underpowered-scale 3.0 \
+  --no-terminations True \
+  --num-envs 1
+```
+
+rough play 和 flat play 的差别主要在于：
+
+- rough 会继续按 checkpoint 对应课程阶段展示地形
+- 即使打开 late-phase 扰动评测，也不会丢掉 rough 地形逻辑
+- 因此这个命令更适合直接看“地形误差 + 恢复误差”共同存在时的表现
+
 ## 推荐评测对比
 
 建议至少比较四组：
@@ -344,6 +440,11 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
 - overshoot 和 underpowered 两类失败是否都比基础 checkpoint 更稳
 - clean 轨迹是否没有被明显破坏
 
+如果你在做 rough late-phase，建议再额外比较两组：
+
+1. rough clean checkpoint，rough clean play
+2. rough late-phase finetune checkpoint，rough disturbed play
+
 ## 当前实现位置
 
 和本任务直接相关的代码位置：
@@ -356,6 +457,12 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
   - [play.py](/home/dp/czy/mjlab/src/mjlab/scripts/play.py)
 - `train` 侧独立 overshoot / underpowered scale：
   - [train.py](/home/dp/czy/mjlab/src/mjlab/scripts/train.py)
+- flat / rough late-phase 任务注册：
+  - [g1/__init__.py](/home/dp/czy/mjlab/src/mjlab/tasks/tracking/config/g1/__init__.py)
+  - [g1_new/__init__.py](/home/dp/czy/mjlab/src/mjlab/tasks/tracking/config/g1_new/__init__.py)
+- flat / rough late-phase 环境配置：
+  - [env_cfgs.py](/home/dp/czy/mjlab/src/mjlab/tasks/tracking/config/g1/env_cfgs.py)
+  - [env_cfgs.py](/home/dp/czy/mjlab/src/mjlab/tasks/tracking/config/g1_new/env_cfgs.py)
 - 一致性测试：
   - [test_tracking_task.py](/home/dp/czy/mjlab/tests/test_tracking_task.py)
 
@@ -369,3 +476,9 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
 - 让 `train` 和 `play` 使用完全一致的缩放规则
 
 因此它更适合作为一个第二阶段课程学习任务，用来解决“前半段空翻没问题，但翻滚后起不来”的真实部署问题。
+
+而 rough 版则是在这个基础上进一步覆盖：
+
+- 地形不平带来的姿态误差
+- 后半段站起时的过冲 / 冲量不足
+- 二者叠加后的恢复鲁棒性

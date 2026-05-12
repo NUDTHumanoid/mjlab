@@ -71,6 +71,13 @@ def unitree_g1_tracking_late_phase_dr_finetune_ppo_runner_cfg() -> RslRlOnPolicy
   return cfg
 
 
+def unitree_g1_rough_tracking_late_phase_dr_finetune_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for rough late-phase-disturbance finetuning."""
+  cfg = unitree_g1_tracking_late_phase_dr_finetune_ppo_runner_cfg()
+  cfg.experiment_name = "g1_tracking_rough_late_phase_dr_finetune"
+  return cfg
+
+
 def unitree_g1_rough_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Create RL runner configuration for the rough G1 tracking task."""
   return _unitree_g1_tracking_ppo_runner_cfg(experiment_name="g1_tracking_rough")

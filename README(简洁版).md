@@ -569,6 +569,31 @@ MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1 \
   --viewer viser
 ```
 
+For late-phase recovery robustness on terrain, a dedicated rough late-phase
+finetune task is also available:
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/rough_or_flat_checkpoint.pt \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --late-phase-train-overshoot-scale 7.0 \
+  --late-phase-train-underpowered-scale 3.0 \
+  --env.scene.num-envs 4096
+```
+
+And the matching rough-terrain stress test:
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1 \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz \
+  --simulate-late-phase-aggressive-dr True \
+  --late-phase-play-overshoot-scale 7.0 \
+  --late-phase-play-underpowered-scale 3.0 \
+  --no-terminations True \
+  --num-envs 1
+```
+
 The terrain sampler is **stage-aware**: the viewer automatically samples terrain proportions and difficulty matching the loaded checkpoint's curriculum stage.
 
 **For example — fine-tune a grounded broad jump on rough terrain from an existing flat checkpoint:**
@@ -670,6 +695,7 @@ For the full change log and alignment rationale, see [G1_New_Alignment_Notes.md]
 | `Mjlab-Tracking-Flat-Unitree-G1` | `Mjlab-Tracking-Flat-Unitree-G1-New` |
 | `Mjlab-Tracking-Flat-Unitree-G1-Late-Phase-DR-Finetune` | `Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune` |
 | `Mjlab-Tracking-Rough-Unitree-G1` | `Mjlab-Tracking-Rough-Unitree-G1-New` |
+| `Mjlab-Tracking-Rough-Unitree-G1-Late-Phase-DR-Finetune` | `Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune` |
 | `Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation` | `Mjlab-Tracking-Flat-Unitree-G1-New-No-State-Estimation` |
 
 ### Command Examples
@@ -708,6 +734,21 @@ experiments. See
 [Tracking_Late_Phase_DR_Finetune.md](Tracking_Late_Phase_DR_Finetune.md) for the
 full design rationale.
 
+**Rough late-phase DR finetuning from an existing checkpoint:**
+
+```bash
+MUJOCO_GL=egl uv run train Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune \
+  --checkpoint-file /path/to/model.pt \
+  --env.commands.motion.motion-file /path/to/motion.npz \
+  --late-phase-train-overshoot-scale 7.0 \
+  --late-phase-train-underpowered-scale 3.0 \
+  --env.scene.num-envs 4096
+```
+
+This variant keeps the rough-terrain curriculum, rough-specific rewards /
+terminations, and stage-aware terrain sampling, then layers the same late-phase
+overshoot / underpowered recovery disturbances on top.
+
 **Replay a motion with the new robot variant:**
 
 ```bash
@@ -745,8 +786,9 @@ uv run play Mjlab-Tracking-Flat-Unitree-G1-New \
 ```
 
 This keeps the motion starting from frame `0`, and in `play` it uses a cleaner
-diagnostic profile focused on a pelvis velocity kick around frame `150`,
-instead of stacking all the generic late-phase perturbations.
+diagnostic profile focused on stand-up overshoot / underpowered perturbations
+around the late recovery frames, instead of stacking all the generic
+late-phase perturbations.
 Remove `--no-terminations True` if you want strict pass/fail playback instead of
 full-rollout inspection.
 
@@ -759,11 +801,25 @@ uv run train Mjlab-Tracking-Rough-Unitree-G1-New \
   --checkpoint-file /path/to/flat_checkpoint.pt
 ```
 
+**Rough-terrain late-phase DR evaluation:**
+
+```bash
+MUJOCO_GL=egl uv run play Mjlab-Tracking-Rough-Unitree-G1-New \
+  --checkpoint-file /path/to/model.pt \
+  --motion-file /path/to/motion.npz \
+  --simulate-late-phase-aggressive-dr True \
+  --late-phase-play-overshoot-scale 7.0 \
+  --late-phase-play-underpowered-scale 3.0 \
+  --no-terminations True \
+  --num-envs 1
+```
+
 ### Current Scope
 
 - For most CLI workflows, you can migrate by replacing `Unitree-G1` with `Unitree-G1-New` in the task ID.
 - `train`, `play`, and `replay-motion` already work with the `*-G1-New` task IDs shown above.
 - A dedicated late-phase disturbance finetune task is available as `Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune`.
+- A dedicated rough late-phase disturbance finetune task is available as `Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune`.
 - The older `Landing-Finetune` and `Recovery-Mixed` experimental tasks have been removed because they were not robust enough and tended to hurt clean full-motion tracking.
 - `csv_to_npz.py` now supports `--robot-variant g1_new`. Because `G1-New` keeps the same 29-DoF joint tree and joint names, this was never a structural blocker, but you can now keep preprocessing aligned as well.
 - If you maintain Python scripts that import configs directly, switch `...tracking.config.g1...` to `...tracking.config.g1_new...`, `...velocity.config.g1...` to `...velocity.config.g1_new...`, and `g1_constants.py` to `g1_constants_new.py`.

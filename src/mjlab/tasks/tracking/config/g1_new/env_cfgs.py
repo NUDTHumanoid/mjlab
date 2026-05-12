@@ -13,6 +13,9 @@ from mjlab.tasks.tracking.config.g1.env_cfgs import (
   unitree_g1_flat_tracking_env_cfg as _base_flat_tracking_env_cfg,
 )
 from mjlab.tasks.tracking.config.g1.env_cfgs import (
+  unitree_g1_rough_late_phase_dr_finetune_env_cfg as _base_rough_late_phase_dr_finetune_env_cfg,
+)
+from mjlab.tasks.tracking.config.g1.env_cfgs import (
   unitree_g1_rough_tracking_env_cfg as _base_rough_tracking_env_cfg,
 )
 
@@ -56,6 +59,18 @@ def unitree_g1_new_rough_tracking_env_cfg(
 ) -> ManagerBasedRlEnvCfg:
   return _swap_to_g1_new(
     _base_rough_tracking_env_cfg(
+      has_state_estimation=has_state_estimation,
+      play=play,
+    )
+  )
+
+
+def unitree_g1_new_rough_late_phase_dr_finetune_env_cfg(
+  has_state_estimation: bool = True,
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  return _swap_to_g1_new(
+    _base_rough_late_phase_dr_finetune_env_cfg(
       has_state_estimation=has_state_estimation,
       play=play,
     )

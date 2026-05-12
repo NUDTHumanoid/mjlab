@@ -192,15 +192,15 @@ def _apply_tracking_late_phase_dr_finetune_overrides(
   motion_cmd.late_phase_sampling_end_frame = None
   motion_cmd.sampling_mode = "adaptive"
 
-  cfg.terminations["anchor_pos"].params["threshold"] = (
-    LATE_PHASE_DR_TERMINATION_THRESHOLDS["anchor_pos"]
-  )
+  anchor_pos_term = cfg.terminations.get("anchor_pos")
+  if anchor_pos_term is not None:
+    anchor_pos_term.params["threshold"] = LATE_PHASE_DR_TERMINATION_THRESHOLDS["anchor_pos"]
   cfg.terminations["anchor_ori"].params["threshold"] = (
     LATE_PHASE_DR_TERMINATION_THRESHOLDS["anchor_ori"]
   )
-  cfg.terminations["ee_body_pos"].params["threshold"] = (
-    LATE_PHASE_DR_TERMINATION_THRESHOLDS["ee_body_pos"]
-  )
+  ee_body_pos_term = cfg.terminations.get("ee_body_pos")
+  if ee_body_pos_term is not None:
+    ee_body_pos_term.params["threshold"] = LATE_PHASE_DR_TERMINATION_THRESHOLDS["ee_body_pos"]
   cfg.rewards["motion_joint_pos"] = RewardTermCfg(
     func=mdp.motion_joint_position_error_exp,
     weight=0.25,
@@ -212,6 +212,100 @@ def _apply_tracking_late_phase_dr_finetune_overrides(
     params={"command_name": "motion", "std": 2.5},
   )
   cfg.events["late_phase_dr_disturbance"] = make_late_phase_tracking_disturbance_event()
+
+
+def _apply_tracking_rough_overrides(
+  cfg: ManagerBasedRlEnvCfg,
+  motion_cmd: MotionCommandCfg,
+  *,
+  play: bool,
+) -> None:
+  """Apply the shared rough-terrain tracking modifications."""
+  cfg.scene.terrain = TerrainEntityCfg(
+    terrain_type="generator",
+    terrain_generator=_make_tracking_rough_terrain_cfg(),
+    max_init_terrain_level=0,
+  )
+  cfg.scene.extent = 2.0
+
+  if not play:
+    #Modified by czy:增添rough四阶段reset地形采样课程，随着训练推进降低flat占比并提高wave占比
+    cfg.events["staged_terrain_sampling"] = EventTermCfg(
+      func=mdp.staged_tracking_terrain_sampling,
+      mode="reset",
+      params={
+        "stages": _TRACKING_ROUGH_TERRAIN_STAGES,
+        "rough_stage_step_offset": _TRACKING_ROUGH_STAGE_STEP_OFFSET,
+        "auto_capture_offset": True,
+      },
+    )
+
+  # Rough terrain creates more simultaneous contacts than flat ground. Raising
+  # these limits reduces the chance of contact truncation becoming the hidden
+  # bottleneck when the robot lands on edges or uneven patches.
+  cfg.sim.nconmax = 60
+  cfg.sim.contact_sensor_maxmatch = 128
+  cfg.sim.mujoco.ccd_iterations = 200
+
+  # On rough terrain, absolute world-space z no longer cleanly reflects tracking
+  # quality. We therefore keep root position tracking in XY, keep the root-z
+  # velocity term for jump timing, and add a soft root-z position term so the
+  # policy is still encouraged to reach the reference jump apex.
+  cfg.rewards["motion_global_root_pos"] = RewardTermCfg(
+    func=mdp.motion_global_anchor_xy_position_error_exp,
+    weight=1.0,
+    params={"command_name": "motion", "std": 0.4},
+  )
+  cfg.rewards["motion_global_root_z_vel"] = RewardTermCfg(
+    func=mdp.motion_global_anchor_z_velocity_error_exp,
+    weight=1.0,
+    params={"command_name": "motion", "std": 1.0},
+  )
+  cfg.rewards["motion_global_root_z_pos"] = RewardTermCfg(
+    func=mdp.motion_global_anchor_z_position_error_exp,
+    weight=0.75,  # modified:rough-stage2 add soft root-z tracking
+    params={"command_name": "motion", "std": 0.2},
+  )
+
+  # Rough-stage2 modification: strengthen continuous orientation supervision so
+  # the robot is pushed toward a cleaner landing posture instead of relying on a
+  # late compensatory step after touchdown.
+  cfg.rewards["motion_global_root_ori"].weight = 1.0  # modified:rough-stage2 0.5→1.0
+  cfg.rewards["motion_body_ori"].weight = 1.5  # modified:rough-stage2 1.0→1.5
+
+  # Mild domain randomization helps robustness, but we intentionally keep it
+  # narrower than the flat task and remove push disturbances. The policy first
+  # needs to preserve the reference jump amplitude while adapting to terrain.
+  cfg.events.pop("push_robot", None)
+  cfg.events["base_com"].params["ranges"] = {
+    0: (-0.015, 0.015),
+    1: (-0.03, 0.03),
+    2: (-0.03, 0.03),
+  }
+  cfg.events["encoder_bias"].params["bias_range"] = (-0.005, 0.005)
+  cfg.events["foot_friction"].params["ranges"] = (0.5, 1.0)
+
+  # These flat-terrain terminations compare world-space z against a flat-motion
+  # reference and would incorrectly end rough-terrain episodes just because the
+  # robot is standing on a bump or landing in a depression.
+  cfg.terminations.pop("anchor_pos", None)
+  cfg.terminations.pop("ee_body_pos", None)
+
+  # Rough-stage2 modification: let the policy survive slightly larger torso tilt
+  # errors during the landing transition. The goal is to avoid terminating just
+  # before touchdown while the stronger orientation rewards pull it back toward a
+  # cleaner landing pose.
+  cfg.terminations["anchor_ori"].params["threshold"] = 1.2  # modified:rough-stage2 0.8→1.2
+
+  if play:
+    #Modified by czy:修改play地形展示逻辑，使其与rough课程阶段同步，而不是独立随机采样地形
+    _apply_staged_terrain_play_overrides(
+      cfg,
+      motion_cmd,
+      num_rows=6,
+      num_cols=6,
+      border_width=10.0,
+    )
 
 
 def _apply_randomized_terrain_play_overrides(
@@ -417,94 +511,19 @@ def unitree_g1_rough_tracking_env_cfg(
   """
   cfg = make_tracking_env_cfg()
   motion_cmd = _configure_g1_tracking_cfg(cfg, has_state_estimation)
+  _apply_tracking_rough_overrides(cfg, motion_cmd, play=play)
+  return cfg
 
-  #Modified by czy:修改rough为仅保留三类地形的程序化terrain，并从最简单行开始初始化
-  cfg.scene.terrain = TerrainEntityCfg(
-    terrain_type="generator",
-    terrain_generator=_make_tracking_rough_terrain_cfg(),
-    max_init_terrain_level=0,
-  )
-  cfg.scene.extent = 2.0
 
-  if not play:
-    #Modified by czy:增添rough四阶段reset地形采样课程，随着训练推进降低flat占比并提高wave占比
-    cfg.events["staged_terrain_sampling"] = EventTermCfg(
-      func=mdp.staged_tracking_terrain_sampling,
-      mode="reset",
-      params={
-        "stages": _TRACKING_ROUGH_TERRAIN_STAGES,
-        "rough_stage_step_offset": _TRACKING_ROUGH_STAGE_STEP_OFFSET,
-        "auto_capture_offset": True,
-      },
-    )
-
-  # Rough terrain creates more simultaneous contacts than flat ground. Raising
-  # these limits reduces the chance of contact truncation becoming the hidden
-  # bottleneck when the robot lands on edges or uneven patches.
-  cfg.sim.nconmax = 60
-  cfg.sim.contact_sensor_maxmatch = 128
-  cfg.sim.mujoco.ccd_iterations = 200
-
-  # On rough terrain, absolute world-space z no longer cleanly reflects tracking
-  # quality. We therefore keep root position tracking in XY, keep the root-z
-  # velocity term for jump timing, and add a soft root-z position term so the
-  # policy is still encouraged to reach the reference jump apex.
-  cfg.rewards["motion_global_root_pos"] = RewardTermCfg(
-    func=mdp.motion_global_anchor_xy_position_error_exp,
-    weight=1.0,
-    params={"command_name": "motion", "std": 0.4},
-  )
-  cfg.rewards["motion_global_root_z_vel"] = RewardTermCfg(
-    func=mdp.motion_global_anchor_z_velocity_error_exp,
-    weight=1.0,
-    params={"command_name": "motion", "std": 1.0},
-  )
-  cfg.rewards["motion_global_root_z_pos"] = RewardTermCfg(
-    func=mdp.motion_global_anchor_z_position_error_exp,
-    weight=0.75,  # modified:rough-stage2 add soft root-z tracking
-    params={"command_name": "motion", "std": 0.2},
-  )
-
-  # Rough-stage2 modification: strengthen continuous orientation supervision so
-  # the robot is pushed toward a cleaner landing posture instead of relying on a
-  # late compensatory step after touchdown.
-  cfg.rewards["motion_global_root_ori"].weight = 1.0  # modified:rough-stage2 0.5→1.0
-  cfg.rewards["motion_body_ori"].weight = 1.5  # modified:rough-stage2 1.0→1.5
-
-  # Mild domain randomization helps robustness, but we intentionally keep it
-  # narrower than the flat task and remove push disturbances. The policy first
-  # needs to preserve the reference jump amplitude while adapting to terrain.
-  cfg.events.pop("push_robot", None)
-  cfg.events["base_com"].params["ranges"] = {
-    0: (-0.015, 0.015),
-    1: (-0.03, 0.03),
-    2: (-0.03, 0.03),
-  }
-  cfg.events["encoder_bias"].params["bias_range"] = (-0.005, 0.005)
-  cfg.events["foot_friction"].params["ranges"] = (0.5, 1.0)
-
-  # These flat-terrain terminations compare world-space z against a flat-motion
-  # reference and would incorrectly end rough-terrain episodes just because the
-  # robot is standing on a bump or landing in a depression.
-  cfg.terminations.pop("anchor_pos", None)
-  cfg.terminations.pop("ee_body_pos", None)
-
-  # Rough-stage2 modification: let the policy survive slightly larger torso tilt
-  # errors during the landing transition. The goal is to avoid terminating just
-  # before touchdown while the stronger orientation rewards pull it back toward a
-  # cleaner landing pose.
-  cfg.terminations["anchor_ori"].params["threshold"] = 1.2  # modified:rough-stage2 0.8→1.2
-
-  if play:
-    #Modified by czy:修改play地形展示逻辑，使其与rough课程阶段同步，而不是独立随机采样地形
-    _apply_staged_terrain_play_overrides(
-      cfg,
-      motion_cmd,
-      num_rows=6,
-      num_cols=6,
-      border_width=10.0,
-    )
-
+def unitree_g1_rough_late_phase_dr_finetune_env_cfg(
+  has_state_estimation: bool = True,
+  play: bool = False,
+) -> ManagerBasedRlEnvCfg:
+  """Create a rough-terrain late-phase-DR finetuning task."""
+  cfg = make_tracking_env_cfg()
+  motion_cmd = _configure_g1_tracking_cfg(cfg, has_state_estimation)
+  _apply_tracking_rough_overrides(cfg, motion_cmd, play=play)
+  _apply_tracking_late_phase_dr_finetune_overrides(cfg, motion_cmd, play=play)
   return cfg
 
 # JumpRough env config disabled for now; keep the general rough-terrain task only.

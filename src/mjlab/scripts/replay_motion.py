@@ -25,6 +25,9 @@ import tyro
 
 import mjlab
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.asset_zoo.robots.nubot_z2.z2_constants import (
+  Z2_FOOT_GEOM_PATTERN,
+)
 from mjlab.scripts.csv_to_npz import (
   G1_FOOT_GEOM_PATTERN,
   _compute_geom_bottom_heights,
@@ -40,6 +43,12 @@ from mjlab.viewer.native.keys import KEY_D
 _REPLAY_TYRO_FLAGS = tuple(
   flag for flag in mjlab.TYRO_FLAGS if flag is not tyro.conf.FlagConversionOff
 )
+
+
+def _default_foot_geom_pattern_for_task(task_id: str) -> str | None:
+  if "-Z2" in task_id:
+    return Z2_FOOT_GEOM_PATTERN
+  return G1_FOOT_GEOM_PATTERN
 
 
 @dataclass(frozen=True)
@@ -275,9 +284,12 @@ class MotionReplayEnvAdapter:
   def _setup_foot_geom_display(self) -> None:
     if self._foot_geom_pattern is None:
       return
-    foot_geom_ids, foot_geom_names = self._robot.find_geoms(
-      self._foot_geom_pattern, preserve_order=True
-    )
+    try:
+      foot_geom_ids, foot_geom_names = self._robot.find_geoms(
+        self._foot_geom_pattern, preserve_order=True
+      )
+    except ValueError:
+      return
     if not foot_geom_ids:
       return
     global_geom_ids = self._robot.indexing.geom_ids[foot_geom_ids].cpu().numpy()
@@ -298,12 +310,20 @@ class MotionReplayEnvAdapter:
     foot_geom_ids = self._foot_geom_ids
     for env_idx in range(self.num_envs):
       geom_pose_w = self._robot.data.geom_pose_w[env_idx, foot_geom_ids]
-      bottom_heights = _compute_geom_bottom_heights(
-        geom_pos_w=geom_pose_w[:, :3],
-        geom_quat_w=geom_pose_w[:, 3:7],
-        geom_sizes=self._foot_geom_sizes,
-        geom_types=self._foot_geom_types,
-      )
+      try:
+        bottom_heights = _compute_geom_bottom_heights(
+          geom_pos_w=geom_pose_w[:, :3],
+          geom_quat_w=geom_pose_w[:, 3:7],
+          geom_sizes=self._foot_geom_sizes,
+          geom_types=self._foot_geom_types,
+        )
+      except ValueError:
+        self._foot_geom_ids = []
+        self._foot_geom_names = ()
+        self._foot_geom_sizes = None
+        self._foot_geom_types = None
+        self._current_min_foot_bottom_z[:] = np.nan
+        return
       self._current_min_foot_bottom_z[env_idx] = float(bottom_heights.min().item())
 
 
@@ -416,6 +436,11 @@ def run_replay(task_id: str, cfg: ReplayMotionConfig) -> None:
   env_cfg.scene.num_envs = cfg.num_envs
   env_cfg.terminations = {}
   env_cfg.viewer.env_idx = min(max(env_cfg.viewer.env_idx, 0), cfg.num_envs - 1)
+  resolved_foot_geom_pattern = (
+    _default_foot_geom_pattern_for_task(task_id)
+    if cfg.foot_geom_pattern == G1_FOOT_GEOM_PATTERN
+    else cfg.foot_geom_pattern
+  )
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   motion_term = cast(MotionCommand, env.command_manager.get_term("motion"))
@@ -423,7 +448,7 @@ def run_replay(task_id: str, cfg: ReplayMotionConfig) -> None:
     env,
     motion_term,
     root_body_name=cfg.root_body_name,
-    foot_geom_pattern=cfg.foot_geom_pattern,
+    foot_geom_pattern=resolved_foot_geom_pattern,
     loop=cfg.loop,
   )
 

@@ -81,8 +81,10 @@ def test_tracking_play_disables_rsi_randomization() -> None:
   tracking_tasks = [
     "Mjlab-Tracking-Flat-Unitree-G1",
     "Mjlab-Tracking-Flat-Unitree-G1-Late-Phase-DR-Finetune",
+    "Mjlab-Tracking-Rough-Unitree-G1-Late-Phase-DR-Finetune",
     "Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation",
     "Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune",
+    "Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune",
   ]
 
   for task_id in tracking_tasks:
@@ -108,8 +110,10 @@ def test_tracking_play_uses_start_sampling_mode() -> None:
   tracking_tasks = [
     "Mjlab-Tracking-Flat-Unitree-G1",
     "Mjlab-Tracking-Flat-Unitree-G1-Late-Phase-DR-Finetune",
+    "Mjlab-Tracking-Rough-Unitree-G1-Late-Phase-DR-Finetune",
     "Mjlab-Tracking-Flat-Unitree-G1-No-State-Estimation",
     "Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune",
+    "Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune",
   ]
 
   for task_id in tracking_tasks:
@@ -226,6 +230,38 @@ def test_late_phase_dr_finetune_task_keeps_full_motion_sampling_and_adds_late_di
     base_cfg.events["foot_friction"].params["ranges"]
   )
   assert cfg.terminations["anchor_ori"].params["threshold"] == 1.2
+
+
+def test_rough_late_phase_dr_finetune_preserves_rough_setup_and_adds_late_disturbance() -> None:
+  """Rough late-phase finetune should keep rough terrain logic and add late-only DR."""
+  base_task_id = "Mjlab-Tracking-Rough-Unitree-G1-New"
+  task_id = "Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune"
+  base_cfg = load_env_cfg(base_task_id)
+  cfg = load_env_cfg(task_id)
+
+  base_motion_cmd = base_cfg.commands["motion"]
+  motion_cmd = cfg.commands["motion"]
+  assert isinstance(base_motion_cmd, MotionCommandCfg)
+  assert isinstance(motion_cmd, MotionCommandCfg)
+  assert motion_cmd.sampling_start_frame is None
+  assert motion_cmd.sampling_end_frame is None
+  assert motion_cmd.sampling_mode == "adaptive"
+  assert cfg.scene.terrain is not None
+  assert cfg.scene.extent == 2.0
+  assert "staged_terrain_sampling" in cfg.events
+  assert "late_phase_dr_disturbance" in cfg.events
+  assert cfg.events["base_com"].params["ranges"] == base_cfg.events["base_com"].params["ranges"]
+  assert cfg.events["encoder_bias"].params["bias_range"] == (
+    base_cfg.events["encoder_bias"].params["bias_range"]
+  )
+  assert cfg.events["foot_friction"].params["ranges"] == (
+    base_cfg.events["foot_friction"].params["ranges"]
+  )
+  assert "anchor_pos" not in cfg.terminations
+  assert "ee_body_pos" not in cfg.terminations
+  assert cfg.terminations["anchor_ori"].params["threshold"] == 1.2
+  assert cfg.rewards["motion_joint_pos"].weight == 0.25
+  assert cfg.rewards["motion_joint_vel"].weight == 0.1
 
 
 def test_play_can_inject_late_phase_aggressive_dr_into_full_motion_task() -> None:
@@ -361,10 +397,14 @@ def test_train_and_play_late_phase_scales_match() -> None:
 
 def test_late_phase_dr_finetune_runner_is_more_conservative() -> None:
   """Late-phase finetune PPO config should be tighter than the base tracking config."""
-  cfg = load_rl_cfg("Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune")
-  assert cfg.algorithm.learning_rate == 1.0e-4
-  assert cfg.algorithm.entropy_coef == 0.001
-  assert cfg.algorithm.desired_kl == 0.003
+  for task_id in (
+    "Mjlab-Tracking-Flat-Unitree-G1-New-Late-Phase-DR-Finetune",
+    "Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune",
+  ):
+    cfg = load_rl_cfg(task_id)
+    assert cfg.algorithm.learning_rate == 1.0e-4
+    assert cfg.algorithm.entropy_coef == 0.001
+    assert cfg.algorithm.desired_kl == 0.003
 
 
 def test_late_phase_dr_finetune_play_keeps_full_motion_without_extra_disturbance() -> None:
@@ -380,6 +420,26 @@ def test_late_phase_dr_finetune_play_keeps_full_motion_without_extra_disturbance
   assert motion_cmd.sampling_start_frame is None
   assert motion_cmd.sampling_end_frame is None
   assert "late_phase_dr_disturbance" not in cfg.events
+  assert cfg.events["base_com"].params["ranges"] == base_cfg.events["base_com"].params["ranges"]
+  assert cfg.events["encoder_bias"].params["bias_range"] == base_cfg.events["encoder_bias"].params["bias_range"]
+  assert cfg.events["foot_friction"].params["ranges"] == base_cfg.events["foot_friction"].params["ranges"]
+
+
+def test_rough_late_phase_dr_finetune_play_keeps_staged_terrain_without_extra_disturbance() -> None:
+  """Rough late-phase play should stay clean while preserving rough-terrain staging."""
+  base_task_id = "Mjlab-Tracking-Rough-Unitree-G1-New"
+  task_id = "Mjlab-Tracking-Rough-Unitree-G1-New-Late-Phase-DR-Finetune"
+  base_cfg = load_env_cfg(base_task_id, play=True)
+  cfg = load_env_cfg(task_id, play=True)
+
+  motion_cmd = cfg.commands["motion"]
+  assert isinstance(motion_cmd, MotionCommandCfg)
+  assert motion_cmd.sampling_mode == "start"
+  assert motion_cmd.sampling_start_frame is None
+  assert motion_cmd.sampling_end_frame is None
+  assert "late_phase_dr_disturbance" not in cfg.events
+  assert "staged_terrain_sampling" in cfg.events
+  assert cfg.scene.terrain is not None
   assert cfg.events["base_com"].params["ranges"] == base_cfg.events["base_com"].params["ranges"]
   assert cfg.events["encoder_bias"].params["bias_range"] == base_cfg.events["encoder_bias"].params["bias_range"]
   assert cfg.events["foot_friction"].params["ranges"] == base_cfg.events["foot_friction"].params["ranges"]
