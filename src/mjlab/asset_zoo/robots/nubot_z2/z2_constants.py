@@ -83,15 +83,6 @@ Z2_FLAT_TRACKING_EE_BODY_NAMES = (
 )
 
 Z2_FOOT_GEOM_PATTERN = r"^(left|right)_foot_contact_\d+$"
-# Sole footprint fitted to the bottom 5 mm band of the ankle-roll meshes:
-# x ~= [-0.034, 0.032], y ~= [-0.019, 0.019], z_min ~= -0.0955.
-_Z2_FOOT_CAPSULE_RADIUS = 0.0065
-_Z2_FOOT_CAPSULE_Z = -0.0070
-_Z2_FOOT_CAPSULES = (
-  ((-0.0270, -0.0120, _Z2_FOOT_CAPSULE_Z), (0.0250, -0.0120, _Z2_FOOT_CAPSULE_Z)),
-  ((-0.0290, 0.0000, _Z2_FOOT_CAPSULE_Z), (0.0270, 0.0000, _Z2_FOOT_CAPSULE_Z)),
-  ((-0.0270, 0.0120, _Z2_FOOT_CAPSULE_Z), (0.0250, 0.0120, _Z2_FOOT_CAPSULE_Z)),
-)
 
 
 def _rename_z2_geoms(spec: mujoco.MjSpec) -> None:
@@ -110,14 +101,12 @@ def _rename_z2_geoms(spec: mujoco.MjSpec) -> None:
 
     for index, geom in enumerate(group3_geoms):
       body_name = body.name
+      if geom.name:
+        continue
       if body_name.endswith("_L_ankle_roll_Link"):
-        geom.name = (
-          "left_foot_contact" if index == 0 else f"left_foot_contact_aux_{index}"
-        )
+        geom.name = f"left_ankle_roll_Link_collision_{index}"
       elif body_name.endswith("_R_ankle_roll_Link"):
-        geom.name = (
-          "right_foot_contact" if index == 0 else f"right_foot_contact_aux_{index}"
-        )
+        geom.name = f"right_ankle_roll_Link_collision_{index}"
       else:
         suffix = body_name.split("Z2_0_Lite_description_0429_1_")[-1]
         geom.name = f"{suffix}_collision_{index}"
@@ -127,13 +116,11 @@ def _rename_z2_geoms(spec: mujoco.MjSpec) -> None:
       geom.name = f"z2_geom_{geom_index}"
 
 
-def _replace_mesh_foot_collisions_with_primitives(spec: mujoco.MjSpec) -> None:
-  """Replace ankle mesh collisions with foot capsules similar to G1 feet.
+def _disable_mesh_foot_collisions(spec: mujoco.MjSpec) -> None:
+  """Disable the original ankle mesh contact geoms.
 
-  Z2's source MJCF exposes the entire ankle-roll mesh as the contact geom. That is
-  too coarse for replay-time foot height analysis because MuJoCo reports it as a mesh
-  geom and our analysis utilities only support primitive shapes. We therefore keep the
-  mesh as visual-only and add a small sole made of capsules on each ankle body.
+  Foot sole capsules are now defined directly inside `assembly.xml`, so the original
+  ankle-roll mesh collision geoms should be disabled to avoid double foot contact.
   """
   for side in ("left", "right"):
     body_name = (
@@ -150,23 +137,6 @@ def _replace_mesh_foot_collisions_with_primitives(spec: mujoco.MjSpec) -> None:
         geom.conaffinity = 0
         geom.condim = 1
         geom.priority = 0
-
-    for index, (start, end) in enumerate(_Z2_FOOT_CAPSULES):
-      geom = body.add_geom(
-        name=f"{side}_foot_contact_{index}",
-        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
-        size=(_Z2_FOOT_CAPSULE_RADIUS, 0.0, 0.0),
-        fromto=(*start, *end),
-        rgba=(0.2, 0.6, 0.2, 0.3),
-        group=3,
-      )
-      geom.contype = 1
-      geom.conaffinity = 1
-      geom.condim = 3
-      geom.priority = 1
-      geom.friction[0] = 0.6
-      geom.friction[1] = 0.005
-      geom.friction[2] = 0.0001
 
 
 def _ensure_floating_base(spec: mujoco.MjSpec) -> None:
@@ -210,7 +180,7 @@ def get_z2_spec() -> mujoco.MjSpec:
   spec = mujoco.MjSpec.from_file(str(Z2_XML))
   spec.assets = get_z2_assets(spec.meshdir)
   _rename_z2_geoms(spec)
-  _replace_mesh_foot_collisions_with_primitives(spec)
+  _disable_mesh_foot_collisions(spec)
   for actuator in tuple(spec.actuators):
     spec.delete(actuator)
   _ensure_floating_base(spec)
@@ -328,7 +298,7 @@ DAMPING_FOUR_BAR = (
 ##
 
 Z2_KNEES_BENT_KEYFRAME = EntityCfg.InitialStateCfg(
-  pos=(0, 0, 0.76),
+  pos=(0, 0, 0.80),
   joint_pos={
     ".*_hip_pitch_joint": -0.312,
     ".*_knee_joint": 0.669,

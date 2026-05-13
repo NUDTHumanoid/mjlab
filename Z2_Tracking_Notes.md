@@ -121,8 +121,24 @@ Current foot sole capsules are defined in:
 
 - `src/mjlab/asset_zoo/robots/nubot_z2/z2_constants.py`
 
-These were fitted against the Z2 ankle-roll mesh footprint and then manually
-shifted to avoid starting below the ground plane.
+These were first fitted against the Z2 ankle-roll mesh footprint and later
+manually re-tuned after direct MuJoCo viewer inspection using
+`src/mjlab/asset_zoo/robots/nubot_z2/xmls/scene_z2.xml`.
+
+Latest manually synced capsule parameters:
+
+- radius: `0.0065`
+- z height: `-0.035`
+- side rows:
+  - start `(-0.03, -0.03, -0.035)` end `(0.11, -0.03, -0.035)`
+- center row:
+  - start `(-0.06, 0.0, -0.035)` end `(0.14, 0.0, -0.035)`
+- side rows:
+  - start `(-0.03, 0.03, -0.035)` end `(0.11, 0.03, -0.035)`
+
+If `scene_z2.xml` is manually edited again, these values should be synchronized
+back into `_Z2_FOOT_CAPSULE_RADIUS`, `_Z2_FOOT_CAPSULE_Z`, and
+`_Z2_FOOT_CAPSULES` in `z2_constants.py`.
 
 ### 6. Collision simplification for performance
 
