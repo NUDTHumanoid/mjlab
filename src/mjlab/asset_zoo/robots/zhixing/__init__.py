@@ -1,0 +1,1 @@
+"""Zhixing humanoid robot assets."""
